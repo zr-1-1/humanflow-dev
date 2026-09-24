@@ -1,0 +1,14 @@
+:root {
+  --hf-motion-fast: 90ms;
+  --hf-motion-normal: 140ms;
+  --hf-motion-slow: 180ms;
+  --hf-ease-standard: cubic-bezier(.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --hf-motion-fast: 0ms;
+    --hf-motion-normal: 0ms;
+    --hf-motion-slow: 0ms;
+  }
+}

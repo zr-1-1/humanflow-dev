@@ -10,7 +10,7 @@
 
 HumanFlow 把 Codex 变成 VS Code 里的项目任务协作者：模型负责讨论、解释并给出候选修改，**是否应用、应用哪些片段始终由你决定**。任务目标与已确认的固定决策会跨轮保留，不受上下文裁剪和线程压缩影响。
 
-> 当前版本：0.4.1（实验性）。已在 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow) 发布，也可从仓库 Releases 下载 VSIX 或自行打包。
+> 当前版本：0.4.2（实验性）。已在 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow) 发布，也可从仓库 Releases 下载 VSIX 或自行打包。
 
 ## 特性
 
@@ -106,6 +106,20 @@ npm run package
 
 默认关闭。开启后模型可调用受限的搜索与网页读取工具：搜索词和网页地址会发送给所选服务（DuckDuckGo 免 Key 可能限流，Tavily 使用你自己的账户额度）。代理可在 `humanflow.webProxy` 填写；工具拒绝访问本机、内网和保留地址。
 
+## 界面与设计系统
+
+面板外观来自仓库内的 UI 素材库 `media/ui/`：设计 Token 与组件类由 `humanflow-ui.css` 聚合，HumanFlow 专属图标、空状态插画和品牌标识也都在同一目录。全部样式基于 VS Code 主题变量，不引入第三方 UI 运行时，也不加载远程资源。
+
+界面按「先看清状态，再决定动作」组织：
+
+- **三个视图**：讨论、修改、问题与验证，各自保留滚动位置与展开状态。
+- **状态语义**：待审查、已失效、已应用、不采纳、暂不处理等状态使用统一的 `HFStatusChip`，`Stale ≠ Error`、`Rejected ≠ Ignored`、`Reviewed ≠ Applied`。
+- **审查栏**：候选批次底部固定显示勾选数量、文件导航与「应用并保存勾选修改」，应用前必须自行确认依赖检查。
+- **人工检查点**：模型给出候选后停在检查点，说明会改动哪些文件与片段，并提供「先讨论 / 查看候选」，没有一键全改。
+- **只读审查摘要**：项目问题按「摘要 → 分组 → 单个问题」展示，并固定提示本轮未修改任何文件。
+
+预览设计系统可以打开 `media/ui/HumanFlow_UI_Asset_Library_V2/showcase/UI_SHOWCASE.html`；接口契约见 [UI 设计系统](docs/ui/HumanFlow_UI_Design_System.md) 与 [UI 素材库 V0.2](docs/ui/HumanFlow_UI_Asset_Library_V0.2_Reference_Edition.md)。
+
 ## 配置项
 
 | 设置 | 作用 | 默认值 |
@@ -190,6 +204,7 @@ node scripts/suggest-code.mjs --file <文件> --start <起始行> --end <结束�
 src/vscode/     扩展宿主：任务状态、上下文构建、批次、验证与 Webview 通信
 src/codex/      App Server 客户端、模型目录、结构化结果、联网工具
 media/          Webview 面板（HTML/CSS/JS）
+media/ui/       UI 素材库：设计 Token、组件样式、专属图标、插画与 Showcase
 scripts/        打包、探针、测试与基准脚本
 tests/          离线测试、协议替身与宿主测试驱动
 docs/           设计文档、交付记录与使用说明

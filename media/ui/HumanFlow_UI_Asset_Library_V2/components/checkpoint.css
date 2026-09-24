@@ -1,0 +1,6 @@
+.hf-checkpoint { position:relative; border:1px solid var(--hf-focus); border-radius:var(--hf-radius-md); padding:13px; background:color-mix(in srgb,var(--hf-focus) 5%, var(--hf-surface-raised)); }
+.hf-checkpoint__eyebrow { position:absolute; top:-9px; left:10px; padding:0 6px; background:var(--hf-bg); color:var(--hf-fg-muted); font-size:var(--hf-text-meta); }
+.hf-checkpoint__assessment { margin:2px 0 9px; font-weight:var(--hf-weight-medium); }
+.hf-checkpoint__next { margin:0; color:var(--hf-fg-muted); font-size:var(--hf-text-sm); }
+.hf-checkpoint__facts { margin-top:8px; display:flex; flex-wrap:wrap; gap:5px; }
+.hf-checkpoint__actions { margin-top:12px; display:flex; justify-content:flex-end; gap:7px; }

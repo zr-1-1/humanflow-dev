@@ -1,0 +1,4 @@
+/* Optional bridge for @vscode/codicons. Load its codicon.css before this file. */
+.hf-ui .codicon { font-size:16px; line-height:1; }
+.hf-button .codicon, .hf-icon-button .codicon { flex:none; }
+.hf-icon-button .codicon { pointer-events:none; }

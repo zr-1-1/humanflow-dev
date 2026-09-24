@@ -1,0 +1,5 @@
+.hf-audit-summary { display:grid; gap:12px; }
+.hf-audit-summary__headline { display:flex; align-items:center; gap:8px; }
+.hf-audit-summary__headline strong { font-size:var(--hf-text-emphasis); }
+.hf-audit-summary__quiet { padding:7px 9px; border:1px solid var(--hf-border); border-radius:var(--hf-radius-sm); color:var(--hf-fg-muted); font-size:var(--hf-text-meta); background:var(--hf-surface-subtle); }
+.hf-audit-summary__quiet::before { content:"✓"; color:var(--hf-success); margin-right:6px; }

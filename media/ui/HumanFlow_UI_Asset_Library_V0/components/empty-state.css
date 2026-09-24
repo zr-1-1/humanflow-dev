@@ -1,0 +1,25 @@
+.hf-empty-state {
+  max-width: 440px;
+  margin: 0 auto;
+  padding: var(--hf-space-6) var(--hf-space-5);
+  text-align: center;
+  color: var(--hf-fg-muted);
+}
+.hf-empty-state__illustration {
+  display: block;
+  width: 144px;
+  height: 108px;
+  object-fit: contain;
+  margin: 0 auto var(--hf-space-4);
+  opacity: .88;
+}
+.hf-empty-state__title {
+  margin: 0 0 var(--hf-space-2);
+  color: var(--hf-fg);
+  font-size: var(--hf-text-empty);
+  font-weight: var(--hf-weight-semibold);
+}
+.hf-empty-state__body {
+  margin: 0 auto var(--hf-space-4);
+  max-width: 34em;
+}

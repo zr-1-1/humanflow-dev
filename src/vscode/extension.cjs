@@ -1,8 +1,10 @@
 const vscode = require('vscode');
 const { pathToFileURL } = require('node:url');
-const { join, resolve } = require('node:path');
+const { join, resolve, basename, extname } = require('node:path');
 const { readFileSync, realpathSync } = require('node:fs');
 const { randomBytes } = require('node:crypto');
+// 面板 JS 每次打开面板都从磁盘读取，可能比正在运行的扩展宿主更新；用协议号识别这种不一致。
+const PANEL_PROTOCOL = 2;
 let shutdown = async () => {};
 exports.deactivate = () => shutdown();
 
@@ -36,7 +38,7 @@ exports.activate = async context => {
     } finally { flushProgress(); }
   };
   const { captureBuffer } = await load('src/vscode/selection.mjs');
-  const { prepareBatch, assertBatchCurrent, batchChanges, assertAbsent } = await load('src/codex/change-batch.mjs');
+  const { prepareBatch, assertBatchCurrent, batchChanges, assertAbsent, candidateChangePage, changePageComment, identifierSpans, supportsIdentifierSpans } = await load('src/codex/change-batch.mjs');
   const { captureBaseline, assertBaseline, resolveReferences, addFindings, updateFinding } = await load('src/vscode/workflow.mjs');
   const { runValidation } = require('./validation.cjs');
   let baseline, references = [], validationExecution;
@@ -89,6 +91,91 @@ exports.activate = async context => {
   let state = { scope: '', selected: '', status: task ? '已恢复任务；下轮根据当前代码重建上下文，旧候选不恢复。' : '可直接讨论项目，也可选择代码作为关注点。', history: task?.history ?? [], suggestion: null, stale: false };
   if (task?.focus) sourceUri = vscode.Uri.file(task.focus.path);
   const previews = new Map();
+  // 最近一次预览的 before/after 文档：预览只保留一个标签页，并且在窗口重载后给出明确失效提示。
+  let previewDocuments = [];
+  const closePreviewTabs = async () => {
+    const targets = new Set(previewDocuments.map(uri => uri.toString()));
+    previewDocuments = [];
+    if (!targets.size) return;
+    // 双栏对比是 diff 标签（original/modified），单页改动是普通文本标签（uri），两种都要回收。
+    const tabs = (vscode.window.tabGroups?.all ?? []).flatMap(group => group.tabs ?? []).filter(tab => {
+      const original = tab.input?.original?.toString?.(), modified = tab.input?.modified?.toString?.(), uri = tab.input?.uri?.toString?.();
+      return (original && targets.has(original)) || (modified && targets.has(modified)) || (uri && targets.has(uri));
+    });
+    if (tabs.length) await vscode.window.tabGroups.close(tabs);
+    // 标签关闭后 VS Code 可能仍保留虚拟文档模型；同时清掉我们缓存的内容，避免长期占用。
+    for (const uri of targets) previews.delete(uri);
+  };
+  // 单页改动预览用 VS Code 自带的 diff 颜色标记删除/新增行；缺少装饰 API 时只保留 diff 语法高亮。
+  let diffDecorations;
+  const changeLineStyle = (background, marker) => {
+    const lane = vscode.OverviewRulerLane?.Full;
+    return {
+      isWholeLine: true,
+      backgroundColor: new vscode.ThemeColor(background),
+      // 与原生 Diff 一致：diffEditorOverview.* 在注册表里默认是 null，取不到时原生同样退回改动行底色，
+      // 因此侧边标记直接使用同一颜色（淡绿 #9ccc2c33 / 淡红 #ff000033），才能和对比视图一致。
+      overviewRulerColor: new vscode.ThemeColor(background),
+      ...(lane === undefined ? {} : { overviewRulerLane: lane }),
+      before: { contentText: marker, color: new vscode.ThemeColor('descriptionForeground') },
+    };
+  };
+  const diffDecorationTypes = () => {
+    if (diffDecorations !== undefined) return diffDecorations;
+    if (!vscode.window.createTextEditorDecorationType || !vscode.ThemeColor) return (diffDecorations = null);
+    diffDecorations = {
+      // 整行底色 + 滚动条（overview ruler）标记 + 行首 −/+ 标记。
+      removed: vscode.window.createTextEditorDecorationType(changeLineStyle('diffEditor.removedTextBackground', '− ')),
+      added: vscode.window.createTextEditorDecorationType(changeLineStyle('diffEditor.insertedTextBackground', '+ ')),
+    };
+    context.subscriptions.push(diffDecorations.removed, diffDecorations.added);
+    return diffDecorations;
+  };
+  // 单页改动里 - / + 由装饰画在行首，正文保持真实代码，从而保留目标语言的语法高亮。
+  const highlightChangeLines = (editor, page) => {
+    const types = diffDecorationTypes();
+    if (!editor?.setDecorations || !types) return;
+    const range = line => new vscode.Range(line, 0, line, editor.document.lineAt(line).text.length);
+    editor.setDecorations(types.removed, page.removed.map(range));
+    editor.setDecorations(types.added, page.added.map(range));
+  };
+  // 保留扩展名，让 VS Code 用目标文件语言着色；文件名加标记以便与真实文件区分。
+  const previewFileName = relativePath => {
+    const name = basename(relativePath), extension = extname(name);
+    return extension ? `${name.slice(0, -extension.length)} 候选改动${extension}` : `HumanFlow 候选改动/${name}`;
+  };
+  // 虚拟文档没有语言服务器的语义着色，这里按轻量标注补足变量/属性/函数/类型颜色。
+  let syntaxDecorations;
+  const syntaxDecorationTypes = () => {
+    if (syntaxDecorations !== undefined) return syntaxDecorations;
+    if (!vscode.window.createTextEditorDecorationType || !vscode.ThemeColor) return (syntaxDecorations = null);
+    const color = id => vscode.window.createTextEditorDecorationType({ color: new vscode.ThemeColor(id) });
+    syntaxDecorations = {
+      variable: color('symbolIcon.variableForeground'),
+      property: color('symbolIcon.propertyForeground'),
+      function: color('symbolIcon.functionForeground'),
+      type: color('symbolIcon.classForeground'),
+    };
+    context.subscriptions.push(...Object.values(syntaxDecorations));
+    return syntaxDecorations;
+  };
+  const highlightIdentifiers = (editor, page, relativePath) => {
+    const types = syntaxDecorationTypes();
+    if (!editor?.setDecorations || !types || !supportsIdentifierSpans(relativePath)) return;
+    const spans = identifierSpans(page.text);
+    for (const [kind, type] of Object.entries(types)) {
+      editor.setDecorations(type, spans.filter(span => span.kind === kind)
+        .map(span => new vscode.Range(span.line, span.start, span.line, span.end)));
+    }
+  };
+  // 打开后定位到第一处改动，和 VS Code 查看更改的行为一致。
+  const revealFirstChange = (editor, page) => {
+    const first = Math.min(...page.removed, ...page.added);
+    if (!Number.isFinite(first) || !editor?.revealRange) return;
+    const position = new vscode.Position(first, 0);
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType?.InCenter);
+  };
   let published, messageRevision = 0, savedSignature;
   const publish = (force = false) => {
     if (task) normalizeTask(task);
@@ -111,7 +198,7 @@ exports.activate = async context => {
       });
       }
     }
-    const next = { ...state, uiState: task?.uiState ?? {}, turns: task?.turns ?? [], batches: task?.batches ?? [], validations: task?.validations ?? [], goal: task?.goal ?? '', decisions: task?.decisions ?? [], budget: task?.budget, threadMode: task?.threadMode, contextDetails: task?.contextDetails ?? null, harness: task?.harness ?? null, draft: task?.draft ?? '', taskId: task?.id, webEnabled: task?.webEnabled === true, webSearchProvider: task?.webSearchProvider ?? 'duckduckgo', provider, findings: task?.findings ?? [], checks: task?.checks ?? [], taskTitle: task?.title, focusPath: task?.focus?.path, busy: busy || navigating, models, choice, loadingModels };
+    const next = { protocol: PANEL_PROTOCOL, ...state, uiState: task?.uiState ?? {}, turns: task?.turns ?? [], batches: task?.batches ?? [], validations: task?.validations ?? [], goal: task?.goal ?? '', decisions: task?.decisions ?? [], budget: task?.budget, threadMode: task?.threadMode, contextDetails: task?.contextDetails ?? null, harness: task?.harness ?? null, draft: task?.draft ?? '', taskId: task?.id, webEnabled: task?.webEnabled === true, webSearchProvider: task?.webSearchProvider ?? 'duckduckgo', provider, findings: task?.findings ?? [], checks: task?.checks ?? [], taskTitle: task?.title, focusPath: task?.focus?.path, busy: busy || navigating, models, choice, loadingModels };
     const changed = {};
     for (const [key, value] of Object.entries(next)) if (!published || JSON.stringify(value) !== JSON.stringify(published[key])) changed[key] = value;
     const full = force || !published || published.taskId !== next.taskId;
@@ -313,6 +400,8 @@ exports.activate = async context => {
       state.suggestion = { ...suggestion, provider, batchId: randomBytes(12).toString('hex'), changes: batchChanges(batch), requestedModel: turnChoice.model, effort: turnChoice.effort };
       state.suggestion.findingId = findingId;
       Object.assign(state.suggestion, { turnId: round.id, stats: changeStats(batch), budgetErrors: budgetViolations(batch, task.budget) });
+      // 响应含非法 JSON 转义时已在解析层规范化；把数量带到面板，避免静默改写。
+      if (suggestion.repairs) state.suggestion.repairs = suggestion.repairs;
       round.status = batch.length ? 'pendingReview' : 'completed'; round.batchId = state.suggestion.batchId;
       task.batches.push({ id: state.suggestion.batchId, turnId: round.id, summary: suggestion.summary, changes: batchChanges(batch), status: round.status });
       addFindings(task, suggestion.findings);
@@ -331,7 +420,7 @@ exports.activate = async context => {
       publish();
     }
   };
-  const preview = async (index, selection, batchId) => {
+  const preview = async (index, selection, batchId, mode = 'diff') => {
     if (busy || state.stale || !Number.isInteger(index) || !batch[index] || !state.suggestion) return;
     if (batchId !== state.suggestion.batchId) throw new Error('预览请求已过期');
     const currentBatch = batch;
@@ -342,12 +431,34 @@ exports.activate = async context => {
     const chosen = selectBatch(currentBatch, selection);
     const file = chosen.find(file => file.path === currentBatch[index].path);
     if (!file) throw new Error('请勾选该文件中要预览的修改');
+    await closePreviewTabs();
     const id = randomBytes(8).toString('hex');
+    // 单页改动：整份候选代码按目标语言高亮，删除/新增行由装饰标记，只读且同样只占一个预览标签页。
+    // 说明：VS Code 没有"打开内联 Diff"的公开参数——菜单里的 Inline View 实际会写用户设置
+    // （diffEditor.setViewMode.inline → updateValue(uri, 'diffEditor.renderSideBySide', false)），
+    // 因此这里不替用户改设置，而是按目标语言自绘单页并用装饰标记改动行。
+    if (mode === 'unified') {
+      const page = candidateChangePage(file.relativePath, file.before, file.edits, {
+        comment: changePageComment(file.relativePath),
+        // 拿不到装饰 API 时退回文本 -/+ 标记，至少还能分辨删除与新增。
+        markers: !diffDecorationTypes(),
+      });
+      const changes = vscode.Uri.from({ scheme: 'humanflow-preview', path: `/${id}/changes/${previewFileName(file.relativePath)}` });
+      previews.set(changes.toString(), page.text);
+      previewDocuments = [changes];
+      const document = await vscode.workspace.openTextDocument(changes);
+      const editor = await vscode.window.showTextDocument(document, { preview: true });
+      highlightChangeLines(editor, page);
+      highlightIdentifiers(editor, page, file.relativePath);
+      revealFirstChange(editor, page);
+      return;
+    }
     const before = vscode.Uri.from({ scheme: 'humanflow-preview', path: `/${id}/before/${file.relativePath}` });
     const after = before.with({ path: before.path.replace('/before/', '/after/') });
     previews.set(before.toString(), file.before);
     previews.set(after.toString(), file.after);
-    await vscode.commands.executeCommand('vscode.diff', before, after, 'HumanFlow：原始快照 ↔ 候选建议（只读）');
+    previewDocuments = [before, after];
+    await vscode.commands.executeCommand('vscode.diff', before, after, `HumanFlow：${file.relativePath} 原始快照 ↔ 候选建议（只读，尚未应用）`, { preview: true });
   };
   const apply = async message => {
     if (busy || loadingModels || state.stale || !state.suggestion) return;
@@ -496,7 +607,8 @@ exports.activate = async context => {
     } finally { await resetClient(); busy = false; publish(); }
   };
   context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('humanflow-preview', {
-    provideTextDocumentContent: uri => previews.get(uri.toString()) ?? '',
+    // 窗口重载或已清理的预览标签会落到这里：给出明确说明，而不是让人看到一份空白文件。
+    provideTextDocumentContent: uri => previews.get(uri.toString()) ?? '（此预览内容已失效：请重新点击“预览本文件勾选结果”或“查看实际应用差异”。业务文件没有变化。）\n',
   }));
   context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(doc => previews.delete(doc.uri.toString())));
   if (vscode.workspace.createFileSystemWatcher) {
@@ -579,11 +691,13 @@ exports.activate = async context => {
       else if (message.type === 'appliedDiff') {
         const file = task?.batches.find(item => item.id === message.batchId)?.appliedSnapshots?.[message.index];
         if (!file) throw new Error('应用快照不存在');
+        await closePreviewTabs();
         const id = randomBytes(8).toString('hex');
         const before = vscode.Uri.from({ scheme: 'humanflow-preview', path: `/${id}/before/${file.relativePath}` });
         const after = before.with({ path: before.path.replace('/before/', '/after/') });
         previews.set(before.toString(), file.before); previews.set(after.toString(), file.after);
-        await vscode.commands.executeCommand('vscode.diff', before, after, 'HumanFlow：应用前 ↔ 应用并尝试保存后的记录（不代表当前代码）');
+        previewDocuments = [before, after];
+        await vscode.commands.executeCommand('vscode.diff', before, after, `HumanFlow：${file.relativePath} 应用前 ↔ 应用记录（不代表当前代码）`, { preview: true });
       }
       else if (message.type === 'webEnabled') {
         if (busy || loadingModels || !task) return;
@@ -643,7 +757,7 @@ exports.activate = async context => {
       }
       else if (message.type === 'ask') await ask(message.question, undefined, ['explain', 'inspect'].includes(message.intent) ? message.intent : 'discuss');
       else if (message.type === 'cancel') { controller?.abort(); validationExecution?.terminate(); }
-      else if (message.type === 'preview') await preview(message.index, message.selection, message.batchId);
+      else if (message.type === 'preview') await preview(message.index, message.selection, message.batchId, message.mode === 'unified' ? 'unified' : 'diff');
       else if (message.type === 'apply') await apply(message);
     } catch (error) { state.status = error.message; publish(); }
     finally { if (navigation) { navigating = false; publish(); } }
@@ -660,9 +774,12 @@ exports.activate = async context => {
       const script = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/panel.js'));
       const style = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/panel.css'));
       const markdown = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/markdown.js'));
+      // UI 设计系统（media/ui）：Token、组件与状态语义由素材库提供，面板只引用入口文件。
+      const uiStyle = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/ui/HumanFlow_UI_Asset_Library_V2/humanflow-ui.css'));
       panel.webview.html = readFileSync(join(context.extensionPath, 'media/panel.html'), 'utf8')
         .replaceAll('{{nonce}}', nonce).replaceAll('{{csp}}', panel.webview.cspSource)
         .replace('{{workspace}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/workspace.js')).toString())
+        .replace('{{uiStyle}}', uiStyle.toString())
         .replace('{{script}}', script.toString()).replace('{{style}}', style.toString()).replace('{{markdown}}', markdown.toString());
       panel.webview.onDidReceiveMessage(dispatch, null, context.subscriptions);
       panel.onDidDispose(() => { controller?.abort(); panel = null; void resetClient(); });

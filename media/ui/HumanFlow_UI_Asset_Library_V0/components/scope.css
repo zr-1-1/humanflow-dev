@@ -1,0 +1,23 @@
+.hf-scope-card__path {
+  margin: 0;
+  font-family: var(--hf-font-code);
+  font-size: var(--hf-text-body);
+}
+.hf-scope-card__tree {
+  margin-top: 4px;
+  padding-left: 14px;
+  color: var(--hf-fg-muted);
+  font-family: var(--hf-font-code);
+  font-size: var(--hf-text-meta);
+}
+.hf-scope-card__limits {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px var(--hf-space-4);
+  margin: var(--hf-space-3) 0 0;
+  padding-top: var(--hf-space-3);
+  border-top: 1px solid var(--hf-border);
+  font-size: var(--hf-text-meta);
+}
+.hf-scope-card__limits dt { color: var(--hf-fg-muted); }
+.hf-scope-card__limits dd { margin: 0; font-family: var(--hf-font-code); }

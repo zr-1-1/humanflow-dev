@@ -1,0 +1,8 @@
+.hf-hunk { border:1px solid var(--hf-border); border-radius:var(--hf-radius-md); overflow:hidden; font-family:var(--hf-font-code); font-size:var(--hf-text-meta); }
+.hf-hunk__head { padding:6px 9px; background:var(--hf-surface-subtle); color:var(--hf-fg-muted); border-bottom:1px solid var(--hf-border); }
+.hf-hunk__line { display:grid; grid-template-columns:34px 18px 1fr; min-height:22px; align-items:center; }
+.hf-hunk__no { padding-right:7px; color:var(--hf-fg-subtle); text-align:right; user-select:none; }
+.hf-hunk__mark { text-align:center; color:var(--hf-fg-muted); user-select:none; }
+.hf-hunk__code { padding:2px 8px; white-space:pre; overflow:auto; }
+.hf-hunk__line--add { background:var(--hf-diff-add); } .hf-hunk__line--add .hf-hunk__mark { color:var(--hf-success); }
+.hf-hunk__line--remove { background:var(--hf-diff-remove); } .hf-hunk__line--remove .hf-hunk__mark { color:var(--hf-error); }

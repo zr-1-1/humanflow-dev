@@ -1,0 +1,10 @@
+.hf-status-chip { min-height:20px; display:inline-flex; align-items:center; gap:5px; padding:1px 7px; border:1px solid var(--hf-border-soft); border-radius:var(--hf-radius-pill); color:var(--hf-fg-muted); background:transparent; font-size:var(--hf-text-meta); line-height:16px; white-space:nowrap; }
+.hf-status-chip::before { content:""; width:5px; height:5px; border-radius:50%; background:currentColor; }
+.hf-status-chip--confirmed,.hf-status-chip--applied,.hf-status-chip--reviewed { color:var(--hf-status-confirmed); }
+.hf-status-chip--proposed { color:var(--hf-status-proposed); }
+.hf-status-chip--review,.hf-status-chip--unreviewed { color:var(--hf-status-review); }
+.hf-status-chip--confirmation,.hf-status-chip--stale { color:var(--hf-status-confirmation); }
+.hf-status-chip--rejected { color:var(--hf-status-rejected); }
+.hf-status-chip--ignored { color:var(--hf-status-ignored); }
+.hf-severity { font-size:var(--hf-text-meta); font-weight:var(--hf-weight-medium); }
+.hf-severity--critical { color:var(--hf-error); } .hf-severity--important { color:var(--hf-warning); } .hf-severity--note { color:var(--hf-info); }

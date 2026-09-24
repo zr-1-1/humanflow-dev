@@ -1,0 +1,4 @@
+.hf-empty { min-height:180px; display:grid; place-items:center; text-align:center; padding:24px; color:var(--hf-fg-muted); }
+.hf-empty__inner { max-width:360px; } .hf-empty__art { width:150px; height:auto; opacity:.92; }
+.hf-empty__title { margin:8px 0 4px; color:var(--hf-fg); font-size:var(--hf-text-empty); font-weight:var(--hf-weight-medium); }
+.hf-empty__body { margin:0; font-size:var(--hf-text-sm); }

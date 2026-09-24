@@ -1,0 +1,90 @@
+:root {
+  color-scheme: light dark;
+  --hf-bg: var(--vscode-editor-background, #1e1e1e);
+  --hf-surface: var(--vscode-sideBar-background, #181818);
+  --hf-surface-raised: var(--vscode-editorWidget-background, #252526);
+  --hf-surface-subtle: var(--vscode-sideBarSectionHeader-background, rgba(255,255,255,.035));
+  --hf-hover: var(--vscode-list-hoverBackground, rgba(255,255,255,.055));
+  --hf-active: var(--vscode-list-activeSelectionBackground, rgba(255,255,255,.09));
+  --hf-selection: var(--vscode-list-inactiveSelectionBackground, rgba(255,255,255,.07));
+
+  --hf-fg: var(--vscode-foreground, #cccccc);
+  --hf-fg-muted: var(--vscode-descriptionForeground, #9d9d9d);
+  --hf-fg-subtle: var(--vscode-disabledForeground, #777777);
+  --hf-code-fg: var(--vscode-editor-foreground, #d4d4d4);
+
+  --hf-border: var(--vscode-panel-border, #3a3a3a);
+  --hf-border-soft: var(--vscode-widget-border, rgba(255,255,255,.12));
+  --hf-focus: var(--vscode-focusBorder, #007fd4);
+
+  --hf-accent: var(--vscode-button-background, #0e639c);
+  --hf-accent-hover: var(--vscode-button-hoverBackground, #1177bb);
+  --hf-accent-fg: var(--vscode-button-foreground, #ffffff);
+  --hf-secondary-bg: var(--vscode-button-secondaryBackground, #3a3d41);
+  --hf-secondary-hover: var(--vscode-button-secondaryHoverBackground, #45494e);
+  --hf-secondary-fg: var(--vscode-button-secondaryForeground, #ffffff);
+
+  --hf-link: var(--vscode-textLink-foreground, #3794ff);
+  --hf-error: var(--vscode-errorForeground, #f48771);
+  --hf-warning: var(--vscode-editorWarning-foreground, #cca700);
+  --hf-success: var(--vscode-testing-iconPassed, #73c991);
+  --hf-info: var(--vscode-editorInfo-foreground, #75beff);
+
+  --hf-diff-add: var(--vscode-diffEditor-insertedTextBackground, rgba(155,185,85,.18));
+  --hf-diff-remove: var(--vscode-diffEditor-removedTextBackground, rgba(255,0,0,.16));
+  --hf-code-bg: var(--vscode-textCodeBlock-background, rgba(127,127,127,.12));
+
+  --hf-brand-blue: #2a70ec;
+  --hf-brand-mid: #2bb9ef;
+  --hf-brand-cyan: #20d7ee;
+
+  --hf-status-confirmed: var(--hf-success);
+  --hf-status-proposed: var(--hf-info);
+  --hf-status-review: var(--hf-fg-muted);
+  --hf-status-confirmation: var(--hf-warning);
+  --hf-status-stale: var(--hf-warning);
+  --hf-status-rejected: var(--hf-error);
+  --hf-status-ignored: var(--hf-fg-subtle);
+  --hf-status-reviewed: var(--hf-success);
+  --hf-status-unreviewed: var(--hf-fg-muted);
+
+  --hf-shadow-popover: 0 4px 16px rgba(0,0,0,.24);
+}
+
+[data-hf-preview-theme="dark"] {
+  color-scheme: dark;
+  --vscode-editor-background:#1f1f1f; --vscode-sideBar-background:#181818;
+  --vscode-editorWidget-background:#252526; --vscode-sideBarSectionHeader-background:#202020;
+  --vscode-foreground:#cccccc; --vscode-descriptionForeground:#9d9d9d; --vscode-disabledForeground:#777;
+  --vscode-editor-foreground:#d4d4d4; --vscode-panel-border:#343434; --vscode-widget-border:#3b3b3b;
+  --vscode-focusBorder:#007fd4; --vscode-button-background:#0e639c; --vscode-button-hoverBackground:#1177bb;
+  --vscode-button-foreground:#fff; --vscode-button-secondaryBackground:#3a3d41; --vscode-button-secondaryHoverBackground:#45494e;
+  --vscode-button-secondaryForeground:#fff; --vscode-textLink-foreground:#3794ff; --vscode-errorForeground:#f48771;
+  --vscode-editorWarning-foreground:#cca700; --vscode-testing-iconPassed:#73c991; --vscode-editorInfo-foreground:#75beff;
+  --vscode-list-hoverBackground:#2a2d2e; --vscode-list-activeSelectionBackground:#37373d; --vscode-list-inactiveSelectionBackground:#2f3034;
+  --vscode-textCodeBlock-background:#262626; --vscode-diffEditor-insertedTextBackground:rgba(155,185,85,.18);
+  --vscode-diffEditor-removedTextBackground:rgba(255,0,0,.16);
+}
+[data-hf-preview-theme="light"] {
+  color-scheme: light;
+  --vscode-editor-background:#fff; --vscode-sideBar-background:#f8f8f8; --vscode-editorWidget-background:#f3f3f3;
+  --vscode-sideBarSectionHeader-background:#f2f2f2; --vscode-foreground:#3b3b3b; --vscode-descriptionForeground:#6f6f6f;
+  --vscode-disabledForeground:#9a9a9a; --vscode-editor-foreground:#333; --vscode-panel-border:#d8d8d8; --vscode-widget-border:#d4d4d4;
+  --vscode-focusBorder:#005fb8; --vscode-button-background:#0078d4; --vscode-button-hoverBackground:#026ec1; --vscode-button-foreground:#fff;
+  --vscode-button-secondaryBackground:#e5e5e5; --vscode-button-secondaryHoverBackground:#d5d5d5; --vscode-button-secondaryForeground:#333;
+  --vscode-textLink-foreground:#006ab1; --vscode-errorForeground:#a1260d; --vscode-editorWarning-foreground:#bf8803;
+  --vscode-testing-iconPassed:#388a34; --vscode-editorInfo-foreground:#1a85ff; --vscode-list-hoverBackground:#f0f0f0;
+  --vscode-list-activeSelectionBackground:#e8e8e8; --vscode-list-inactiveSelectionBackground:#ededed; --vscode-textCodeBlock-background:#f5f5f5;
+  --vscode-diffEditor-insertedTextBackground:rgba(155,185,85,.20); --vscode-diffEditor-removedTextBackground:rgba(255,0,0,.10);
+}
+[data-hf-preview-theme="hc"] {
+  color-scheme: dark;
+  --vscode-editor-background:#000; --vscode-sideBar-background:#000; --vscode-editorWidget-background:#000; --vscode-sideBarSectionHeader-background:#000;
+  --vscode-foreground:#fff; --vscode-descriptionForeground:#fff; --vscode-disabledForeground:#bdbdbd; --vscode-editor-foreground:#fff;
+  --vscode-panel-border:#fff; --vscode-widget-border:#fff; --vscode-focusBorder:#f38518; --vscode-button-background:#000080;
+  --vscode-button-hoverBackground:#0000aa; --vscode-button-foreground:#fff; --vscode-button-secondaryBackground:#000; --vscode-button-secondaryHoverBackground:#222;
+  --vscode-button-secondaryForeground:#fff; --vscode-textLink-foreground:#6fc3df; --vscode-errorForeground:#f48771;
+  --vscode-editorWarning-foreground:#ffd602; --vscode-testing-iconPassed:#89d185; --vscode-editorInfo-foreground:#75beff;
+  --vscode-list-hoverBackground:#202020; --vscode-list-activeSelectionBackground:#000080; --vscode-list-inactiveSelectionBackground:#202020;
+  --vscode-textCodeBlock-background:#111; --vscode-diffEditor-insertedTextBackground:rgba(0,255,0,.14); --vscode-diffEditor-removedTextBackground:rgba(255,0,0,.18);
+}

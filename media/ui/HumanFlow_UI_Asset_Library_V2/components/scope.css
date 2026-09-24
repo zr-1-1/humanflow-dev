@@ -1,0 +1,4 @@
+.hf-scope-card__path { margin:0; font-family:var(--hf-font-code); }
+.hf-scope-card__tree { margin:2px 0 10px 12px; color:var(--hf-fg-muted); font-family:var(--hf-font-code); }
+.hf-scope-card__limits { margin:0; display:grid; grid-template-columns:1fr auto; gap:4px 12px; font-size:var(--hf-text-meta); }
+.hf-scope-card__limits dt { color:var(--hf-fg-muted); } .hf-scope-card__limits dd { margin:0; font-family:var(--hf-font-code); }

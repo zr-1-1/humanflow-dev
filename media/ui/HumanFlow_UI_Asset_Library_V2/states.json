@@ -1,0 +1,42 @@
+{
+  "confirmed": {
+    "meaning": "User-confirmed decision",
+    "tone": "success"
+  },
+  "proposed": {
+    "meaning": "AI suggestion, not applied",
+    "tone": "info"
+  },
+  "needs-review": {
+    "meaning": "Waiting for human review",
+    "tone": "neutral"
+  },
+  "needs-confirmation": {
+    "meaning": "Insufficient evidence; human confirmation needed",
+    "tone": "warning"
+  },
+  "applied": {
+    "meaning": "Written to project",
+    "tone": "success"
+  },
+  "stale": {
+    "meaning": "Source changed; candidate must be regenerated or revalidated",
+    "tone": "warning"
+  },
+  "rejected": {
+    "meaning": "Explicitly rejected",
+    "tone": "error"
+  },
+  "ignored": {
+    "meaning": "Deferred / not handled now",
+    "tone": "muted"
+  },
+  "reviewed": {
+    "meaning": "Reviewed, not necessarily applied",
+    "tone": "success"
+  },
+  "unreviewed": {
+    "meaning": "Not yet reviewed",
+    "tone": "neutral"
+  }
+}

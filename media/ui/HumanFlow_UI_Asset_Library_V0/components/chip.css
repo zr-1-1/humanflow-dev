@@ -1,0 +1,30 @@
+.hf-status-chip {
+  --hf-chip-color: var(--hf-fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--hf-chip-color) 42%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--hf-chip-color) 9%, transparent);
+  color: var(--hf-fg);
+  font-size: var(--hf-text-meta);
+  white-space: nowrap;
+}
+.hf-status-chip::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--hf-chip-color);
+}
+
+.hf-status-chip--confirmed { --hf-chip-color: var(--hf-status-confirmed); }
+.hf-status-chip--proposed { --hf-chip-color: var(--hf-status-proposed); }
+.hf-status-chip--review { --hf-chip-color: var(--hf-status-review); }
+.hf-status-chip--confirmation { --hf-chip-color: var(--hf-status-confirmation); }
+.hf-status-chip--applied { --hf-chip-color: var(--hf-status-confirmed); }
+.hf-status-chip--stale { --hf-chip-color: var(--hf-status-stale); }
+.hf-status-chip--rejected { --hf-chip-color: var(--hf-status-rejected); }
+.hf-status-chip--ignored { --hf-chip-color: var(--hf-status-ignored); }

@@ -1,0 +1,38 @@
+.hf-finding-card {
+  --hf-finding-level: var(--hf-info);
+  position: relative;
+}
+.hf-finding-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--hf-finding-level);
+}
+.hf-finding-card--important { --hf-finding-level: var(--hf-warning); }
+.hf-finding-card--critical { --hf-finding-level: var(--hf-error); }
+.hf-finding-card--note { --hf-finding-level: var(--hf-info); }
+
+.hf-finding-card__id {
+  font-family: var(--hf-font-code);
+  color: var(--hf-fg-muted);
+  font-size: var(--hf-text-meta);
+}
+.hf-finding-card__location {
+  margin: 0 0 5px;
+  font-family: var(--hf-font-code);
+  color: var(--hf-fg-muted);
+  font-size: var(--hf-text-meta);
+}
+.hf-finding-card__summary {
+  margin: 0;
+  font-weight: var(--hf-weight-medium);
+}
+.hf-finding-card__evidence {
+  margin-top: var(--hf-space-3);
+  padding: var(--hf-space-2) var(--hf-space-3);
+  border-left: 2px solid var(--hf-border-muted);
+  background: color-mix(in srgb, var(--hf-bg) 35%, transparent);
+  color: var(--hf-fg-muted);
+  font-size: var(--hf-text-meta);
+}
