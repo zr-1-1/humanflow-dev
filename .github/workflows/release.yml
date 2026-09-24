@@ -27,13 +27,38 @@ jobs:
           node-version: 22
       - run: npm test
       - run: npm run package
-      - name: 创建 GitHub Release 并附加 VSIX
+      - name: 准备 Release 说明
+        id: notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 优先使用 CHANGELOG 中与标签对应的段落，再附上 GitHub 自动汇总；
+          # 两者都取不到时留空，由后面的步骤回退为 GitHub 默认说明。
+          version="${TAG#v}"
+          section="$(awk -v heading="## [${version}]" 'index($0, heading) == 1 { capture = 1; next } capture && /^## / { exit } capture' CHANGELOG.md 2>/dev/null || true)"
+          automatic="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${TAG}" --jq .body 2>/dev/null || true)"
+          if [ -n "${section}" ] && [ -n "${automatic}" ]; then
+            body="${section}"$'\n\n'"---"$'\n\n'"${automatic}"
+          else
+            body="${section}${automatic}"
+          fi
+          { echo "body<<RELEASE_NOTES"; printf '%s\n' "${body}"; echo "RELEASE_NOTES"; } >> "$GITHUB_OUTPUT"
+      - name: 创建或更新 GitHub Release 并附加 VSIX
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES: ${{ steps.notes.outputs.body }}
+        run: |
+          # 每次都重写说明，避免重跑标签时正文停留在旧内容。
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/*.vsix --clobber
-            gh release edit "$TAG" --title "HumanFlow $TAG"
+            if [ -n "${NOTES}" ]; then
+              gh release edit "$TAG" --title "HumanFlow $TAG" --notes "${NOTES}"
+            else
+              gh release edit "$TAG" --title "HumanFlow $TAG"
+              echo "::warning::未能生成 Release 说明，已保留原说明"
+            fi
+          elif [ -n "${NOTES}" ]; then
+            gh release create "$TAG" dist/*.vsix --title "HumanFlow $TAG" --notes "${NOTES}" --verify-tag
           else
             gh release create "$TAG" dist/*.vsix --title "HumanFlow $TAG" --generate-notes --verify-tag
           fi
