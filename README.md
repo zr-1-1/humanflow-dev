@@ -5,10 +5,12 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
 [![CI](https://github.com/zr-1-1/humanflow-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/zr-1-1/humanflow-dev/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/zr-1-1/humanflow-dev)](https://github.com/zr-1-1/humanflow-dev/releases)
+[![Marketplace](https://img.shields.io/visual-studio-marketplace/v/windflowing.humanflow)](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/windflowing.humanflow)](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow)
 
 HumanFlow 把 Codex 变成 VS Code 里的项目任务协作者：模型负责讨论、解释并给出候选修改，**是否应用、应用哪些片段始终由你决定**。任务目标与已确认的固定决策会跨轮保留，不受上下文裁剪和线程压缩影响。
 
-> 当前版本：0.4.1（实验性）。尚未发布到 VS Code Marketplace，请自行打包或从仓库 Releases 获取 VSIX。
+> 当前版本：0.4.1（实验性）。已在 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow) 发布，也可从仓库 Releases 下载 VSIX 或自行打包。
 
 ## 特性
 
@@ -34,6 +36,14 @@ HumanFlow 把 Codex 变成 VS Code 里的项目任务协作者：模型负责讨
 
 ## 安装
 
+### 从 Marketplace 安装（推荐）
+
+在 VS Code 扩展视图搜索 **HumanFlow**，或打开[扩展页面](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow)后点击 Install。命令行等价写法：
+
+```bash
+code --install-extension windflowing.humanflow
+```
+
 ### 从 VSIX 安装
 
 1. 获取 VSIX：自行打包（见下）或从仓库 Releases 下载。
@@ -43,8 +53,8 @@ HumanFlow 把 Codex 变成 VS Code 里的项目任务协作者：模型负责讨
 ### 从源码打包
 
 ```bash
-git clone https://github.com/zr-1-1/HumanFlow.git
-cd HumanFlow
+git clone https://github.com/zr-1-1/humanflow-dev.git
+cd humanflow-dev
 npm run package
 ```
 

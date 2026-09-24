@@ -6,7 +6,7 @@ const { join } = require('node:path');
 exports.run = async () => {
   const results = [];
   const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-  const extension = vscode.extensions.getExtension('humanflow-local.humanflow');
+  const extension = vscode.extensions.getExtension('windflowing.humanflow');
   // 路径设置是 machine 作用域；必须确认隔离用户配置生效，禁止回退到真实 CLI。
   assert.equal(vscode.workspace.getConfiguration('humanflow').get('codexJsPath'), join(extension.extensionPath, 'tests/fixtures/fake-codex.cjs'));
   const api = await extension.activate();
