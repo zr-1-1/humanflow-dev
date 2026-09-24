@@ -30,4 +30,10 @@ jobs:
       - name: 创建 GitHub Release 并附加 VSIX
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$TAG" dist/*.vsix --title "HumanFlow $TAG" --generate-notes
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.vsix --clobber
+            gh release edit "$TAG" --title "HumanFlow $TAG"
+          else
+            gh release create "$TAG" dist/*.vsix --title "HumanFlow $TAG" --generate-notes
+          fi
