@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve, join } from 'node:path';
+import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // 使用本机 VS Code 和独立临时配置，不下载依赖，不接触真实模型或业务项目。
@@ -44,8 +44,9 @@ function findCode() {
     join(process.env.HOME ?? '', 'Applications/Visual Studio Code.app/Contents/MacOS/Electron'),
   ] : ['/usr/share/code/code', '/usr/bin/code', '/snap/bin/code'];
   const names = process.platform === 'win32' ? ['Code.exe', 'code.exe'] : ['code', 'code-insiders'];
+  // Windows 上 PATH 常指向 <安装目录>\bin，真正的可执行文件在上一级；macOS 上 PATH 常指向 app 包内。
   const pathCandidates = (process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':')
-    .filter(Boolean).flatMap(dir => names.map(name => join(dir, name)));
+    .filter(Boolean).flatMap(dir => [...names.map(name => join(dir, name)), join(dirname(dir), names[0])]);
   const candidate = [...installs, ...pathCandidates].find(value => value && existsSync(value));
   if (!candidate) throw new Error('未找到 VS Code 可执行文件；请传入路径或设置 HUMANFLOW_VSCODE。已尝试：' + [...installs, ...pathCandidates].join('、'));
   return candidate;
