@@ -46,7 +46,7 @@ cd HumanFlow
 npm run package
 ```
 
-产物为 `dist/humanflow-<版本>.vsix`。打包脚本使用白名单方式写入，不会包含凭据、Git 元数据或开发资料。
+产物为 `dist/humanflow-<版本>.vsix`。打包脚本使用白名单方式写入，只包含 `package.json`、`README.md`、`LICENSE`、`src/`、`media/`（存在 `CHANGELOG.md`、`icon.png` 时一并打入），不含测试、设计文档、凭据或 Git 元数据。
 
 ## 快速开始
 
