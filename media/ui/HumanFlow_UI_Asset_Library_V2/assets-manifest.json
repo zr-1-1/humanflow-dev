@@ -1,0 +1,69 @@
+{
+  "name": "HumanFlow UI Asset Library",
+  "version": "2.0.0",
+  "generated": "2026-09-24",
+  "coreRuntimeDependencies": [],
+  "optionalLibraries": [
+    {
+      "name": "@vscode/codicons",
+      "versionObserved": "0.0.46-24",
+      "role": "generic IDE icons",
+      "recommended": true
+    },
+    {
+      "name": "@vscode-elements/elements-lite",
+      "versionObserved": "0.4.0",
+      "role": "optional pure CSS basic controls",
+      "recommended": "optional"
+    },
+    {
+      "name": "@vscode-elements/elements",
+      "versionObserved": "2.5.1",
+      "role": "optional complex web components",
+      "recommended": "advanced-only"
+    }
+  ],
+  "deprecatedAvoid": [
+    "@vscode/webview-ui-toolkit"
+  ],
+  "customIcons": [
+    "hf-focus",
+    "hf-human-control",
+    "hf-proposal",
+    "hf-fixed-decision",
+    "hf-finding",
+    "hf-second-opinion",
+    "hf-context",
+    "hf-stale",
+    "hf-review",
+    "hf-checkpoint",
+    "hf-scope",
+    "hf-change-group"
+  ],
+  "illustrations": [
+    "empty-task",
+    "no-findings",
+    "review-ready",
+    "stale-candidate"
+  ],
+  "components": [
+    "HFStatusChip",
+    "HFFindingCard",
+    "HFProposalCard",
+    "HFDecisionCard",
+    "HFScopeCard",
+    "HFHumanCheckpoint",
+    "HFContextMeter",
+    "HFReviewHeader",
+    "HFFindingNavigator",
+    "HFReviewProgress",
+    "HFInlineFinding",
+    "HFReviewBar",
+    "HFChangeSummary",
+    "HFChangeGroup",
+    "HFFileReviewState",
+    "HFAuditSummary",
+    "HFCodeHunk",
+    "HFEmptyState"
+  ]
+}

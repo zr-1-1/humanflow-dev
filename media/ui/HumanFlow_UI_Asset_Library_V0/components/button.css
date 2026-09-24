@@ -1,0 +1,62 @@
+.hf-button {
+  min-height: var(--hf-control-h-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--hf-radius-sm);
+  background: var(--hf-accent);
+  color: var(--hf-accent-fg);
+  font: inherit;
+  font-weight: var(--hf-weight-medium);
+  cursor: pointer;
+  transition: background var(--hf-motion-fast) var(--hf-ease-standard),
+              border-color var(--hf-motion-fast) var(--hf-ease-standard),
+              opacity var(--hf-motion-fast) var(--hf-ease-standard);
+}
+
+.hf-button:hover:not(:disabled) { background: var(--hf-accent-hover); }
+.hf-button:focus-visible { outline: 1px solid var(--hf-border-focus); outline-offset: 2px; }
+.hf-button:disabled { opacity: .48; cursor: default; }
+
+.hf-button--secondary {
+  background: var(--vscode-button-secondaryBackground, var(--hf-surface-raised));
+  color: var(--vscode-button-secondaryForeground, var(--hf-fg));
+  border-color: var(--hf-border-muted);
+}
+.hf-button--secondary:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, var(--hf-surface-hover));
+}
+
+.hf-button--ghost {
+  background: transparent;
+  color: var(--hf-fg);
+  border-color: transparent;
+}
+.hf-button--ghost:hover:not(:disabled) { background: var(--hf-surface-hover); }
+
+.hf-button--danger {
+  background: transparent;
+  color: var(--hf-error);
+  border-color: color-mix(in srgb, var(--hf-error) 45%, transparent);
+}
+.hf-button--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--hf-error) 10%, transparent);
+}
+
+.hf-icon-button {
+  width: var(--hf-control-h-md);
+  height: var(--hf-control-h-md);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--hf-radius-sm);
+  background: transparent;
+  color: var(--hf-fg-muted);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.hf-icon-button:hover { background: var(--hf-surface-hover); color: var(--hf-fg); }
+.hf-icon-button:focus-visible { outline: 1px solid var(--hf-border-focus); outline-offset: 1px; }

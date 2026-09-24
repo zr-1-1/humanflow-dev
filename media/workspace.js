@@ -12,9 +12,9 @@ function createWorkspace(api) {
     uiTimer = setTimeout(() => api.postMessage({ type: 'uiState', taskId: id, value }), 500);
   };
   const groups = {
-    discuss: [document.querySelector('.history-toolbar'), el('history'), el('load-history')],
-    changes: [el('candidate'), el('batch-history')],
-    findings: [el('findings-panel'), el('checks-panel'), el('validation-history')],
+    discuss: [document.querySelector('.history-toolbar'), el('history'), el('load-history'), el('checkpoint')],
+    changes: [el('changes-empty'), el('candidate'), el('batch-history')],
+    findings: [el('audit-summary'), el('findings-panel'), el('checks-panel'), el('validation-history')],
   };
   const containers = {};
   for (const [name, nodes] of Object.entries(groups)) {
@@ -124,44 +124,41 @@ function createWorkspace(api) {
       for (const key of ['files', 'added', 'removed']) setUnlessEditing(`budget-${key}`, data.budget?.[key] ?? '');
       setUnlessEditing('thread-mode', data.threadMode ?? 'rebuild');
     }
-    el('context-details').textContent = data.contextDetails ? JSON.stringify({ ...data.contextDetails, tokens: data.harness?.usage ?? '未知（未收到服务端用量）', compaction: data.harness?.compaction ?? '未收到压缩事件' }, null, 2) : '尚未发送请求';
+    const plan = [];
+    if (data.goal?.trim()) plan.push('已设任务目标');
+    if (data.decisions?.length) plan.push(`${data.decisions.length} 条固定决策`);
+    if (data.budget?.enabled) plan.push('已限制修改范围');
+    if (data.threadMode === 'continuous') plan.push('持续线程');
+    el('plan-summary').textContent = plan.length ? `（${plan.join(' · ')}）` : '';
     for (const id of ['save-plan', 'add-decision', 'compact-thread', 'reset-thread']) el(id).disabled = data.busy || data.loadingModels;
     el('compact-thread').disabled ||= data.threadMode !== 'continuous';
     if (data.busy) el('send-feedback').disabled = true;
     el('decisions').replaceChildren(...(data.decisions ?? []).map(item => {
-      const row = document.createElement('p'), text = document.createElement('span'); text.textContent = `${item.status} · ${item.text}`;
-      const edit = document.createElement('button'); edit.textContent = '编辑'; edit.onclick = () => { editingDecision = item.id; decisionSource = item.turnId; el('decision-text').value = item.text; };
-      const remove = document.createElement('button'); remove.textContent = '取消固定'; remove.onclick = () => send({ type: 'decision', remove: item.id });
-      row.append(text, edit, remove); if (item.turnId) { const source = document.createElement('button'); source.textContent = '来源'; source.onclick = () => jump(item.turnId); row.append(source); } return row;
+      const card = document.createElement('article'), body = document.createElement('div'), meta = document.createElement('div');
+      const statement = document.createElement('p'), status = document.createElement('span');
+      card.className = 'hf-card hf-decision-card'; body.className = 'hf-card__body'; meta.className = 'changeset-file__meta';
+      statement.className = 'hf-decision-card__statement'; statement.textContent = item.text;
+      status.className = 'hf-status-chip hf-status-chip--confirmed'; status.textContent = item.status ?? '用户确认';
+      meta.append(status);
+      if (item.turnId) {
+        const source = document.createElement('button'); source.type = 'button';
+        source.className = 'hf-button hf-button--ghost'; source.textContent = '来源轮次'; source.onclick = () => jump(item.turnId);
+        meta.append(source);
+      }
+      const footer = document.createElement('footer'); footer.className = 'hf-card__footer';
+      const edit = document.createElement('button'); edit.type = 'button';
+      edit.className = 'hf-button hf-button--secondary'; edit.textContent = '编辑';
+      edit.onclick = () => { editingDecision = item.id; decisionSource = item.turnId; el('decision-text').value = item.text; };
+      const remove = document.createElement('button'); remove.type = 'button';
+      remove.className = 'hf-button hf-button--ghost'; remove.textContent = '取消固定'; remove.onclick = () => send({ type: 'decision', remove: item.id });
+      footer.append(edit, remove);
+      body.append(statement, meta); card.append(body, footer); return card;
     }));
-    const stats = data.suggestion?.stats;
-    el('batch-stats').textContent = stats ? `${stats.files} 个文件 · 替换后 ${stats.added} 行 / 替换前 ${stats.removed} 行` : '';
-    el('budget-errors').textContent = (data.suggestion?.budgetErrors ?? []).join('；');
     el('tab-changes').textContent = `修改（${data.suggestion?.changes?.length ?? 0}）`;
     el('tab-findings').textContent = `问题与验证（${(data.findings ?? []).filter(item => !['resolved', 'dismissed'].includes(item.status)).length}）`;
-    const records = (data.batches ?? []).slice().reverse();
-    // 历史候选只在展开时挂载，完整数据仍可搜索。
-    if (el('batch-records').dataset.signature !== JSON.stringify(records)) {
-      el('batch-records').dataset.signature = JSON.stringify(records);
-      el('batch-records').replaceChildren(...records.map(record => {
-        const details = document.createElement('details'), summary = document.createElement('summary');
-        summary.textContent = `${labels[record.status] ?? record.status} · ${record.summary}`; details.append(summary);
-        details.addEventListener('toggle', () => { if (details.open && details.childElementCount === 1) {
-          const pre = document.createElement('pre'); pre.textContent = JSON.stringify(record.changes, null, 2);
-          const link = document.createElement('button'); link.textContent = '定位原始请求'; link.onclick = () => jump(record.turnId); details.append(link, pre);
-          for (const [index, file] of (record.appliedSnapshots ?? []).entries()) {
-            const diff = document.createElement('button'); diff.textContent = `查看实际应用差异：${file.relativePath}`;
-            diff.onclick = () => send({ type: 'appliedDiff', batchId: record.id, index }); details.append(diff);
-          }
-        } }); return details;
-      }));
-    }
     const previous = el('feedback-record').value;
     el('feedback-record').replaceChildren(...(data.validations ?? []).map(record => { const option = document.createElement('option'); option.value = record.id; option.textContent = record.command; return option; }));
     if (previous) el('feedback-record').value = previous;
-    el('validation-records').replaceChildren(...(data.validations ?? []).map(record => {
-      const p = document.createElement('p'); p.textContent = `${record.stale ? '需重验' : '记录时有效'} · 退出码 ${record.exitCode ?? '未知'} · ${record.command} · 批次 ${record.batchId ?? '未知'}\n${record.coverage ?? ''}`; return p;
-    }));
     for (const key of Object.keys(groups)) { containers[key].hidden = key !== view; el(`tab-${key}`).setAttribute('aria-selected', String(key === view)); }
     if (changedTask) {
       main.scrollTop = ui.scroll?.[view] ?? 0;

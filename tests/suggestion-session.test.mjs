@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, writeFile, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureSelection, assertUnchanged, parseSuggestion, runSuggestionTurn } from '../src/codex/suggestion-session.mjs';
+import { captureSelection, assertUnchanged, parseSuggestion, runSuggestionTurn, startSuggestionSession } from '../src/codex/suggestion-session.mjs';
 
 test('中文选区与文件过期检测', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'humanflow-test-'));
@@ -83,6 +83,61 @@ test('拒绝错误结构和过大候选代码', () => {
   assert.throws(() => parseSuggestion('{}'), /格式无效/);
   const value = { summary: '', changes: [{ path: 'a', reason: '', edits: [{ before: 'x', after: 'x'.repeat(100001) }] }], explanation: '', verification: '' };
   assert.throws(() => parseSuggestion(JSON.stringify(value)), /过大/);
+});
+
+test('dependencies 与 references 写成字符串时按单项列表接收', () => {
+  const base = { summary: '说明', changes: [], explanation: '', verification: '' };
+  const single = parseSuggestion(JSON.stringify({ ...base, dependencies: '  本批片段必须一起接受  ', references: 'README.md' }));
+  assert.deepEqual(single.dependencies, ['本批片段必须一起接受']);
+  assert.deepEqual(single.references, ['README.md']);
+  const empty = parseSuggestion(JSON.stringify({ ...base, dependencies: '   ', references: '' }));
+  assert.deepEqual(empty.dependencies, []);
+  assert.deepEqual(empty.references, []);
+  assert.throws(() => parseSuggestion(JSON.stringify({ ...base, findings: '一段文字' })), /findings 格式无效/);
+});
+
+test('非代码字段的非法转义按原意修复，并在面板提示中计数', () => {
+  const raw = `{
+  "summary": "围绕 src/stk\\_export/stk\\_out.py 的讨论",
+  "changes": [{ "path": "src/stk\\_export/stk\\_out.py", "reason": "合并拼接", "operation": "edit", "edits": [{ "before": "x", "after": "y" }] }],
+  "explanation": "说明",
+  "verification": "未运行",
+  "findings": [{ "path": "src/stk\\_export/stk\\_out.py", "line": 268, "title": "无占位符的 f-string", "evidence": "证据", "impact": "影响" }],
+  "checks": [{ "command": "ruff check src/stk\\_export/stk\\_out.py", "reason": "静态检查" }],
+  "dependencies": "本批独立可审",
+  "references": ["src/stk\\_export/stk\\_out.py"]
+}`;
+  const value = parseSuggestion(raw);
+  assert.equal(value.changes[0].path, 'src/stk_export/stk_out.py');
+  assert.equal(value.findings[0].path, 'src/stk_export/stk_out.py');
+  assert.equal(value.checks[0].command, 'ruff check src/stk_export/stk_out.py');
+  assert.deepEqual(value.references, ['src/stk_export/stk_out.py']);
+  assert.deepEqual(value.dependencies, ['本批独立可审']);
+  assert.equal(value.repairs, 10);
+  // 修复数量是内部提示字段，不进入重新序列化的内容。
+  assert.equal(JSON.stringify(value).includes('"repairs"'), false);
+});
+
+test('代码片段内的非法转义拒绝自动修复，合法转义不受影响', () => {
+  const raw = `{ "summary": "说明", "explanation": "", "verification": "", "changes": [{ "path": "a.py", "reason": "r", "edits": [{ "before": "x", "after": "a\\_b" }] }] }`;
+  assert.throws(() => parseSuggestion(raw), /代码片段/);
+  // 只处理 Markdown 风格的多余转义；像 \d 这类可能有语义的反斜杠仍按语法错误拒绝，不猜测原意。
+  assert.throws(() => parseSuggestion(`{ "summary": "正则 \\d+", "explanation": "", "verification": "", "changes": [] }`), /不是有效 JSON/);
+  const valid = { summary: 'a\\nb 与 \\u4e2d', changes: [{ path: 'a.js', reason: 'r', edits: [{ before: 'x = "\\\\d+"', after: 'y' }] }], explanation: '', verification: '' };
+  const value = parseSuggestion(JSON.stringify(valid));
+  assert.equal(value.repairs, undefined);
+  assert.equal(value.summary, valid.summary);
+  assert.equal(value.changes[0].edits[0].before, valid.changes[0].edits[0].before);
+});
+
+test('提示词要求 dependencies 为字符串数组并禁止多余转义', async () => {
+  const client = { requests: [], async request(method, params) { this.requests.push({ method, params }); return { thread: { id: 'thread' } }; } };
+  assert.equal(await startSuggestionSession(client, 'D:/project'), 'thread');
+  const instructions = client.requests[0].params.developerInstructions;
+  assert.match(instructions, /dependencies 是字符串数组/);
+  assert.match(instructions, /references 是字符串数组/);
+  assert.match(instructions, /不做 JSON 或 Markdown 转义/);
+  assert.equal(client.requests[0].method, 'thread/start');
 });
 
 test('提前取消不发送模型请求', async () => {

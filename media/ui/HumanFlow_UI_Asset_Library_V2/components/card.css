@@ -1,0 +1,7 @@
+.hf-card { border:1px solid var(--hf-border); border-radius:var(--hf-radius-md); background:var(--hf-surface-raised); overflow:hidden; }
+.hf-card__header { min-height:35px; padding:8px 11px; display:flex; align-items:center; justify-content:space-between; gap:10px; border-bottom:1px solid var(--hf-border); }
+.hf-card__body { padding:11px; }
+.hf-card__footer { padding:8px 11px; display:flex; align-items:center; justify-content:flex-end; gap:7px; border-top:1px solid var(--hf-border); }
+.hf-card__title { margin:0; font-size:var(--hf-text-body); font-weight:var(--hf-weight-semibold); }
+.hf-card__label { margin:0 0 3px; color:var(--hf-fg-muted); font-size:var(--hf-text-meta); }
+.hf-card__value { margin:0; }

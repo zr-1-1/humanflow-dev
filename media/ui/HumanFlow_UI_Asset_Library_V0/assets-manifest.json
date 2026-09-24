@@ -1,0 +1,40 @@
+{
+  "name": "HumanFlow UI Asset Library",
+  "version": "0.1.0",
+  "entry": "humanflow-ui.css",
+  "brand": {
+    "icon": "brand/humanflow-icon.png",
+    "colors": [
+      "#2a70ec",
+      "#2bb9ef",
+      "#20d7ee"
+    ]
+  },
+  "icons": [
+    "hf-focus.svg",
+    "hf-human-control.svg",
+    "hf-proposal.svg",
+    "hf-fixed-decision.svg",
+    "hf-finding.svg",
+    "hf-second-opinion.svg",
+    "hf-context.svg",
+    "hf-stale.svg"
+  ],
+  "illustrations": [
+    "empty-task.svg",
+    "no-findings.svg",
+    "review-ready.svg",
+    "stale-candidate.svg"
+  ],
+  "components": [
+    "HFStatusChip",
+    "HFFindingCard",
+    "HFProposalCard",
+    "HFDecisionCard",
+    "HFScopeCard",
+    "HFHumanCheckpoint",
+    "HFContextMeter",
+    "HFEmptyState"
+  ],
+  "runtimeDependencies": []
+}

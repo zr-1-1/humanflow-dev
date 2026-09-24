@@ -1,0 +1,5 @@
+.hf-review-header { padding:12px 0; display:grid; gap:10px; border-bottom:1px solid var(--hf-border); }
+.hf-review-header__top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.hf-review-header__title { margin:0; font-size:var(--hf-text-title); font-weight:var(--hf-weight-semibold); }
+.hf-review-header__meta { margin-top:2px; color:var(--hf-fg-muted); font-size:var(--hf-text-meta); }
+.hf-review-header__tools { display:flex; gap:4px; }

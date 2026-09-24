@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN" data-hf-preview-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HumanFlow UI V0 Showcase</title>
+<link rel="stylesheet" href="../humanflow-ui.css">
+<style>
+  html, body { margin: 0; min-height: 100%; background: var(--hf-bg); }
+  body { padding: 28px; }
+  .showcase { max-width: 1120px; margin: 0 auto; }
+  .showcase__top { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:24px; }
+  .brand { display:flex; align-items:center; gap:12px; }
+  .brand img { width:40px; height:40px; border-radius:10px; }
+  .brand h1 { margin:0; font-size:18px; }
+  .brand p { margin:2px 0 0; color:var(--hf-fg-muted); font-size:12px; }
+  .theme-toggle { display:flex; gap:6px; }
+  .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+  .panel { border:1px solid var(--hf-border); border-radius:8px; background:var(--hf-surface); padding:16px; }
+  .panel--wide { grid-column:1/-1; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .icon-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
+  .icon-cell { min-height:74px; border:1px solid var(--hf-border); border-radius:5px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; color:var(--hf-fg-muted); font-size:11px; }
+  .icon-cell img { width:22px; height:22px; filter:none; }
+  .icon-mask { width:22px;height:22px;background:var(--hf-fg); mask:var(--icon) center/contain no-repeat; -webkit-mask:var(--icon) center/contain no-repeat; }
+  .ill-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+  .ill { border:1px solid var(--hf-border); border-radius:5px; text-align:center; padding:8px; font-size:11px; color:var(--hf-fg-muted); }
+  .ill img { width:100%; max-height:110px; }
+  .mini-two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width: 780px) { .grid,.mini-two { grid-template-columns:1fr; } .panel--wide { grid-column:auto; } .icon-grid,.ill-grid { grid-template-columns:repeat(2,1fr); } }
+</style>
+</head>
+<body class="hf-ui">
+<main class="showcase">
+  <header class="showcase__top">
+    <div class="brand">
+      <img src="../brand/humanflow-icon.png" alt="HumanFlow">
+      <div><h1>HumanFlow UI Asset Library · V0</h1><p>VS Code native feel · engineering review · human-controlled workflow</p></div>
+    </div>
+    <div class="theme-toggle">
+      <button class="hf-button hf-button--secondary" id="darkBtn">Dark</button>
+      <button class="hf-button hf-button--secondary" id="lightBtn">Light</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <section class="panel panel--wide">
+      <h2 class="hf-section-title">Status system</h2>
+      <div class="chips">
+        <span class="hf-status-chip hf-status-chip--confirmed">Confirmed</span>
+        <span class="hf-status-chip hf-status-chip--proposed">Proposed</span>
+        <span class="hf-status-chip hf-status-chip--review">Needs review</span>
+        <span class="hf-status-chip hf-status-chip--confirmation">Needs confirmation</span>
+        <span class="hf-status-chip hf-status-chip--applied">Applied</span>
+        <span class="hf-status-chip hf-status-chip--stale">Stale</span>
+        <span class="hf-status-chip hf-status-chip--rejected">Rejected</span>
+        <span class="hf-status-chip hf-status-chip--ignored">Ignored</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="hf-section-title">Project Audit finding</h2>
+      <article class="hf-card hf-finding-card hf-finding-card--important">
+        <header class="hf-card__header"><span class="hf-finding-card__id">F-003</span><span class="hf-status-chip hf-status-chip--confirmation">Important</span></header>
+        <div class="hf-card__body">
+          <p class="hf-finding-card__location">satlib_ModeCal.c · calcu2()</p>
+          <p class="hf-finding-card__summary">坐标转换方向可能与项目约定不一致</p>
+          <div class="hf-finding-card__evidence">Evidence · input: ECI → expected: VVLH</div>
+        </div>
+        <footer class="hf-card__footer"><button class="hf-button hf-button--ghost">Discuss</button><button class="hf-button hf-button--secondary">Inspect</button></footer>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2 class="hf-section-title">Proposal</h2>
+      <article class="hf-card hf-proposal-card">
+        <header class="hf-card__header"><h3 class="hf-card__title">Proposed change</h3><span class="hf-status-chip hf-status-chip--proposed">1 file</span></header>
+        <div class="hf-card__body">
+          <p class="hf-proposal-card__summary">修正 calcu2 中 ECI→VVLH 转换方向</p>
+          <div class="hf-proposal-card__grid">
+            <div><p class="hf-card__label">Why</p><p class="hf-card__value">当前矩阵实际执行了逆方向变换</p></div>
+            <div><p class="hf-card__label">Scope</p><p class="hf-card__value hf-code">satlib_ModeCal.c · calcu2()</p></div>
+            <div><p class="hf-card__label">Impact</p><p class="hf-card__value">局部，无接口变化</p></div>
+          </div>
+        </div>
+        <footer class="hf-card__footer"><button class="hf-button hf-button--secondary">View diff</button><button class="hf-button">Prepare patch</button></footer>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2 class="hf-section-title">Fixed decision</h2>
+      <article class="hf-card hf-decision-card">
+        <header class="hf-card__header"><h3 class="hf-card__title">Fixed decision</h3><span class="hf-status-chip hf-status-chip--confirmed">Confirmed</span></header>
+        <div class="hf-card__body"><p class="hf-decision-card__statement">C_ab maps b → a</p><p class="hf-decision-card__formula">x_a = C_ab · x_b</p></div>
+        <footer class="hf-card__footer"><span class="hf-meta" style="margin-right:auto">Confirmed by you</span><button class="hf-button hf-button--ghost">Edit</button></footer>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2 class="hf-section-title">Scope + context</h2>
+      <div class="mini-two">
+        <article class="hf-card hf-scope-card">
+          <div class="hf-card__body"><p class="hf-card__label">Current scope</p><p class="hf-scope-card__path">satlib_ModeCal.c</p><div class="hf-scope-card__tree">└─ calcu2()</div><dl class="hf-scope-card__limits"><dt>Files</dt><dd>1</dd><dt>Functions</dt><dd>1</dd><dt>Max diff</dt><dd>80 lines</dd><dt>Interface</dt><dd>unchanged</dd></dl></div>
+        </article>
+        <article class="hf-card"><div class="hf-card__body"><p class="hf-card__label">Context</p><div class="hf-context-meter"><div class="hf-context-meter__row"><span>Code</span><div class="hf-context-meter__track"><div class="hf-context-meter__fill" style="--hf-meter-value:72%"></div></div><span class="hf-context-meter__value">72%</span></div><div class="hf-context-meter__row"><span>History</span><div class="hf-context-meter__track"><div class="hf-context-meter__fill" style="--hf-meter-value:25%"></div></div><span class="hf-context-meter__value">25%</span></div><div class="hf-context-meter__row"><span>Decisions</span><div class="hf-context-meter__track"><div class="hf-context-meter__fill" style="--hf-meter-value:8%"></div></div><span class="hf-context-meter__value">8%</span></div><p class="hf-context-meter__note">2 earlier messages omitted</p></div></div></article>
+      </div>
+    </section>
+
+    <section class="panel panel--wide">
+      <h2 class="hf-section-title">Human checkpoint</h2>
+      <div class="hf-checkpoint">
+        <span class="hf-checkpoint__eyebrow">Human checkpoint</span>
+        <p class="hf-checkpoint__assessment">AI 认为问题已经定位：ECI→VVLH 矩阵方向不一致</p>
+        <p class="hf-checkpoint__next"><strong>Next:</strong> 修改 calcu2() 1 处</p>
+        <div class="hf-checkpoint__actions"><button class="hf-button">Continue</button><button class="hf-button hf-button--secondary">Discuss first</button></div>
+      </div>
+    </section>
+
+    <section class="panel panel--wide">
+      <h2 class="hf-section-title">HumanFlow custom icons</h2>
+      <div class="icon-grid" id="iconGrid"></div>
+    </section>
+
+    <section class="panel panel--wide">
+      <h2 class="hf-section-title">Empty-state illustrations</h2>
+      <div class="ill-grid">
+        <div class="ill"><img src="../illustrations/empty-task.svg" alt=""><div>empty-task</div></div>
+        <div class="ill"><img src="../illustrations/no-findings.svg" alt=""><div>no-findings</div></div>
+        <div class="ill"><img src="../illustrations/review-ready.svg" alt=""><div>review-ready</div></div>
+        <div class="ill"><img src="../illustrations/stale-candidate.svg" alt=""><div>stale-candidate</div></div>
+      </div>
+    </section>
+  </div>
+</main>
+<script>
+const icons=['hf-focus','hf-human-control','hf-proposal','hf-fixed-decision','hf-finding','hf-second-opinion','hf-context','hf-stale'];
+const grid=document.getElementById('iconGrid');
+for(const name of icons){
+  const cell=document.createElement('div'); cell.className='icon-cell';
+  const mask=document.createElement('span'); mask.className='icon-mask'; mask.style.setProperty('--icon', `url('../icons/${name}.svg')`);
+  const label=document.createElement('span'); label.textContent=name;
+  cell.append(mask,label); grid.append(cell);
+}
+document.getElementById('darkBtn').onclick=()=>document.documentElement.dataset.hfPreviewTheme='dark';
+document.getElementById('lightBtn').onclick=()=>document.documentElement.dataset.hfPreviewTheme='light';
+</script>
+</body>
+</html>

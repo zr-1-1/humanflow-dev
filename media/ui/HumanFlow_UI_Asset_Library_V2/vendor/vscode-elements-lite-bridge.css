@@ -1,0 +1,6 @@
+/* Optional bridge for @vscode-elements/elements-lite.
+   This file contains only HumanFlow overrides; it does not redistribute third-party CSS. */
+.hf-ui .vscode-button { min-height:26px; border-radius:var(--hf-radius-sm); }
+.hf-ui .vscode-textfield, .hf-ui .vscode-textarea, .hf-ui .vscode-select { font-family:var(--hf-font-ui); font-size:var(--hf-font-size); }
+.hf-ui .vscode-label { color:var(--hf-fg); }
+.hf-ui .vscode-divider { border-color:var(--hf-border); }

@@ -1,0 +1,10 @@
+{
+  "note": "Optional only. HumanFlow V2 core does not require these packages.",
+  "dependencies": {
+    "@vscode/codicons": "0.0.46-24",
+    "@vscode-elements/elements-lite": "0.4.0"
+  },
+  "advancedOptional": {
+    "@vscode-elements/elements": "2.5.1"
+  }
+}

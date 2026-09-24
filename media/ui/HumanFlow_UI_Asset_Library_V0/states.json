@@ -1,0 +1,42 @@
+{
+  "confirmed": {
+    "label": "Confirmed",
+    "meaning": "User-confirmed engineering fact or decision",
+    "tone": "success"
+  },
+  "proposed": {
+    "label": "Proposed",
+    "meaning": "Model suggestion; not applied",
+    "tone": "info"
+  },
+  "needsReview": {
+    "label": "Needs review",
+    "meaning": "Waiting for human review",
+    "tone": "neutral"
+  },
+  "needsConfirmation": {
+    "label": "Needs confirmation",
+    "meaning": "Evidence is insufficient; human decision required",
+    "tone": "warning"
+  },
+  "applied": {
+    "label": "Applied",
+    "meaning": "Change has been written to the project",
+    "tone": "success"
+  },
+  "stale": {
+    "label": "Stale",
+    "meaning": "Underlying source changed; regenerate or revalidate",
+    "tone": "warning"
+  },
+  "rejected": {
+    "label": "Rejected",
+    "meaning": "User explicitly declined the proposal",
+    "tone": "error"
+  },
+  "ignored": {
+    "label": "Ignored",
+    "meaning": "Deferred without judging the proposal incorrect",
+    "tone": "muted"
+  }
+}

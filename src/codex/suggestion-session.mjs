@@ -45,12 +45,61 @@ export const suggestionSchema = {
   },
 };
 
+// JSON 合法转义；其余反斜杠前缀都是非法写法，模型偶尔会把 Markdown 的 `\_` 习惯带进 JSON。
+const jsonEscapes = new Set(['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u']);
+// 只修复 Markdown 常见的多余转义；像 \d、\w 这类可能有正则语义的反斜杠保持原样，仍按语法错误拒绝。
+const markdownEscapes = new Set(['_', '*', '[', ']', '(', ')', '#', '+', '-', '.', '!', '|', '~', '<', '>', '{', '}', '`']);
+
+// 定位 before / after 字符串区间：这些内容会写进文件，必须按原样解析，不做任何修复。
+function codeStringRanges(text) {
+  const ranges = [];
+  const pattern = /"(?:before|after)"\s*:\s*"/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const start = pattern.lastIndex;
+    let index = start, escaped = false;
+    while (index < text.length) {
+      const character = text[index];
+      if (escaped) { escaped = false; index++; continue; }
+      if (character === '\\') { escaped = true; index++; continue; }
+      if (character === '"') break;
+      index++;
+    }
+    ranges.push([start, index]);
+    pattern.lastIndex = index + 1;
+  }
+  return ranges;
+}
+
+// 只去掉非代码字段里的非法转义反斜杠；代码片段出现非法转义时宁可报错，也不改写要写入文件的内容。
+function repairInvalidEscapes(text) {
+  const ranges = codeStringRanges(text);
+  const inCode = index => ranges.some(([start, end]) => index >= start && index < end);
+  let result = '', repairs = 0;
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index], next = text[index + 1] ?? '';
+    if (character === '\\' && !jsonEscapes.has(next) && markdownEscapes.has(next)) {
+      if (inCode(index)) throw new Error(`代码片段含非法 JSON 转义（位置 ${index}），未自动改写；请重新生成候选`);
+      repairs++;
+      continue;
+    }
+    result += character;
+  }
+  return { text: result, repairs };
+}
+
+// 修复属于内部处理，不写进任务历史；具体数量由面板提示，保持“不做静默改写”的可解释性。
+function withRepairs(value, repairs) {
+  if (value && typeof value === 'object') Object.defineProperty(value, 'repairs', { value: repairs, enumerable: false, configurable: true });
+  return value;
+}
+
 function readSuggestionJson(text) {
   if (typeof text !== 'string' || !text.trim()) throw new Error('模型未返回建议内容，请重试');
   if (text.length > 1000000) throw new Error('模型响应超过 100 万字符，请缩小批次');
   const source = text.trim();
   try { return JSON.parse(source); } catch { /* 继续识别外围说明和围栏。 */ }
-  // 按字符串转义和括号层级识别唯一完整对象；不使用首尾大括号截取，不修复代码内容。
+  // 按字符串转义和括号层级识别唯一完整对象；不使用首尾大括号截取，也不在候选代码片段内做任何修复。
   const spans = [];
   let start = -1, quoted = false, escaped = false;
   const stack = [];
@@ -85,8 +134,16 @@ function readSuggestionJson(text) {
   if (fences.length && (fences.length !== 2 || fences[0] !== fences[1]
       || !/(`{3,}|~{3,})(?:json)?\s*$/i.test(prefix)
       || !/^\s*(`{3,}|~{3,})/.test(suffix))) fail('代码围栏未闭合或包含多个代码块');
-  try { return JSON.parse(source.slice(begin, end)); }
+  const slice = source.slice(begin, end);
+  try { return JSON.parse(slice); }
   catch (error) {
+    let repaired;
+    try { repaired = repairInvalidEscapes(slice); }
+    catch (repairError) { fail(repairError.message); }
+    if (repaired?.repairs) {
+      try { return withRepairs(JSON.parse(repaired.text), repaired.repairs); }
+      catch { /* 修复后仍不是有效 JSON，按原始错误报告。 */ }
+    }
     const position = /position (\d+)/.exec(error.message)?.[1];
     fail(`JSON 内部语法错误${position ? `，对象内位置 ${position}` : ''}，请查看失败响应；未自动改写代码字符串`);
   }
@@ -99,8 +156,14 @@ export function parseSuggestion(text) {
     throw new Error('模型返回的建议格式无效');
   }
   if (value.changes.length > 12) throw new Error('单批文件过多，请按修改意图拆批');
+  const textLists = new Set(['dependencies', 'references']);
   for (const name of ['findings', 'checks', 'dependencies', 'references']) {
     value[name] ??= [];
+    // dependencies / references 要求用文字说明；模型把整段文字写成一个字符串时按单项列表接收。
+    if (textLists.has(name) && typeof value[name] === 'string') {
+      const description = value[name].trim();
+      value[name] = description ? [description] : [];
+    }
     if (!Array.isArray(value[name]) || value[name].length > 100) throw new Error(`${name} 格式无效或条目过多`);
   }
   if (value.findings.some(item => !item || ['path', 'title', 'evidence', 'impact'].some(key => typeof item[key] !== 'string') || !Number.isInteger(item.line) || item.line < 1)
@@ -204,10 +267,11 @@ export async function startSuggestionSession(client, cwd, { model, webEnabled = 
       + 'task.history 是讨论记录而非执行结果。task.outcomes 区分已应用、未应用和保存失败；用户可能随后手动修改或撤销，以当前代码为准。上下文可能省略较早记录，不能假定拥有完整历史。'
       + 'summary 先说明本批目的和涉及的文件关系；changes 中每个文件提供项目相对路径 path、必要性 reason、精确替换 edits。'
       + '最终响应必须是符合输出结构的单个 JSON 对象，不要加 Markdown 代码围栏或 JSON 之外的说明文字。'
+      + '所有字符串按原样书写，不做 JSON 或 Markdown 转义：路径用 / 分隔且不含反斜杠，下划线、星号、方括号、反引号等前面不要加反斜杠。'
       + '同一个文件只输出一个 changes 条目，多处修改放入该条目的 edits 数组；不要重复输出同一片段。'
       + '每个 edit 的 before 是该文件中唯一匹配的非空原文，after 为替换文本，保留缩进；多个片段不可重叠，均基于同一原始版本。先读取文件，不能猜测原文。'
       + '无需修改时 changes=[]。operation=edit 修改现有文件；operation=create 新增文件，只有一个 before=""、after 为完整文件的片段，父目录必须存在。删除和重命名只做文字方案，不输出可执行操作。每批最多 12 个文件。'
-      + 'findings 输出本轮发现的问题，每项含 path、line、title、evidence、impact；只读审查不输出 changes。checks 提供可选验证 command 与 reason，不自行执行。dependencies 用文字指出必须一起接受的片段和文件。references 列出实际读取的项目相对文件路径。无对应内容时使用空数组。'
+      + 'findings 输出本轮发现的问题，每项含 path、line、title、evidence、impact；只读审查不输出 changes。checks 提供可选验证 command 与 reason，不自行执行。dependencies 是字符串数组，每项一条文字，指出必须一起接受的片段和文件；references 是字符串数组，列出实际读取的项目相对文件路径。两者无对应内容时都使用空数组，不要写成单个字符串或整段说明。'
       + '已有明确授权内不重复请求确认；新设计决策或明显扩大目标时先讨论。说明关键 API 作用和实际参考的路径、符号。'
       + 'verification 明确区分实际读取核对和建议的运行验证；未运行代码不得声称测试通过。',
   });

@@ -1,0 +1,2 @@
+.hf-finding-nav { display:inline-flex; align-items:center; gap:2px; }
+.hf-finding-nav__count { min-width:54px; text-align:center; color:var(--hf-fg-muted); font:var(--hf-text-meta)/1.2 var(--hf-font-code); }

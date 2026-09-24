@@ -1,0 +1,21 @@
+.hf-decision-card {
+  position: relative;
+  border-color: color-mix(in srgb, var(--hf-status-confirmed) 38%, var(--hf-border));
+}
+.hf-decision-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--hf-status-confirmed);
+}
+.hf-decision-card__statement {
+  margin: 0;
+  font-family: var(--hf-font-code);
+  font-weight: var(--hf-weight-medium);
+}
+.hf-decision-card__formula {
+  margin: var(--hf-space-2) 0 0;
+  color: var(--hf-fg-muted);
+  font-family: var(--hf-font-code);
+}

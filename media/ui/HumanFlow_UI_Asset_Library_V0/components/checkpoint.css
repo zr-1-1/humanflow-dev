@@ -1,0 +1,27 @@
+.hf-checkpoint {
+  position: relative;
+  margin: var(--hf-space-5) 0;
+  padding: var(--hf-space-4);
+  border-top: 1px solid var(--hf-border);
+  border-bottom: 1px solid var(--hf-border);
+  background: color-mix(in srgb, var(--hf-brand-blue) 4%, transparent);
+}
+.hf-checkpoint__eyebrow {
+  position: absolute;
+  top: -10px;
+  left: var(--hf-space-3);
+  padding: 0 8px;
+  background: var(--hf-bg);
+  color: var(--hf-fg-muted);
+  font-size: var(--hf-text-meta);
+  font-weight: var(--hf-weight-medium);
+}
+.hf-checkpoint__assessment {
+  margin: 0 0 var(--hf-space-3);
+  font-weight: var(--hf-weight-medium);
+}
+.hf-checkpoint__next {
+  margin: 0 0 var(--hf-space-4);
+  color: var(--hf-fg-muted);
+}
+.hf-checkpoint__actions { display: flex; gap: var(--hf-space-2); flex-wrap: wrap; }

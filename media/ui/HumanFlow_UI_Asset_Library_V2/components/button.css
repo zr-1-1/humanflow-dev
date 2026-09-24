@@ -1,0 +1,13 @@
+.hf-button { min-height:26px; border:1px solid transparent; border-radius:var(--hf-radius-sm); padding:3px 10px; display:inline-flex; align-items:center; justify-content:center; gap:6px; background:var(--hf-accent); color:var(--hf-accent-fg); cursor:pointer; font-weight:var(--hf-weight-medium); transition:background var(--hf-duration-fast) var(--hf-ease), border-color var(--hf-duration-fast) var(--hf-ease); }
+.hf-button:hover { background:var(--hf-accent-hover); }
+.hf-button:focus-visible { outline:1px solid var(--hf-focus); outline-offset:2px; }
+.hf-button:disabled { opacity:.52; cursor:default; }
+.hf-button--secondary { background:var(--hf-secondary-bg); color:var(--hf-secondary-fg); }
+.hf-button--secondary:hover { background:var(--hf-secondary-hover); }
+.hf-button--ghost { background:transparent; color:var(--hf-fg); border-color:transparent; }
+.hf-button--ghost:hover { background:var(--hf-hover); }
+.hf-button--danger { background:transparent; color:var(--hf-error); border-color:color-mix(in srgb, var(--hf-error) 55%, transparent); }
+.hf-button--danger:hover { background:color-mix(in srgb, var(--hf-error) 10%, transparent); }
+.hf-icon-button { width:26px; height:26px; padding:0; border:1px solid transparent; border-radius:var(--hf-radius-sm); display:inline-grid; place-items:center; color:var(--hf-fg); background:transparent; cursor:pointer; }
+.hf-icon-button:hover { background:var(--hf-hover); }
+.hf-icon-button:focus-visible { outline:1px solid var(--hf-focus); outline-offset:1px; }

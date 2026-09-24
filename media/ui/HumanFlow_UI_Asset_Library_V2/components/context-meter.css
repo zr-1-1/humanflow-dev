@@ -1,0 +1,6 @@
+.hf-context-meter { display:grid; gap:7px; }
+.hf-context-meter__row { display:grid; grid-template-columns:64px 1fr 34px; align-items:center; gap:8px; font-size:var(--hf-text-meta); }
+.hf-context-meter__track { height:4px; background:var(--hf-border-soft); overflow:hidden; }
+.hf-context-meter__fill { height:100%; width:var(--hf-meter-value,0%); background:var(--hf-info); }
+.hf-context-meter__value { text-align:right; font-family:var(--hf-font-code); color:var(--hf-fg-muted); }
+.hf-context-meter__note { margin:2px 0 0; color:var(--hf-fg-muted); font-size:var(--hf-text-meta); }

@@ -1,0 +1,34 @@
+.hf-context-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--hf-space-2);
+}
+.hf-context-meter__row {
+  display: grid;
+  grid-template-columns: 72px minmax(80px, 1fr) 40px;
+  align-items: center;
+  gap: var(--hf-space-2);
+  font-size: var(--hf-text-meta);
+}
+.hf-context-meter__track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--hf-fg) 10%, transparent);
+}
+.hf-context-meter__fill {
+  height: 100%;
+  width: var(--hf-meter-value, 0%);
+  border-radius: inherit;
+  background: var(--hf-fg-muted);
+}
+.hf-context-meter__value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--hf-fg-muted);
+}
+.hf-context-meter__note {
+  margin: var(--hf-space-1) 0 0;
+  color: var(--hf-fg-muted);
+  font-size: var(--hf-text-meta);
+}

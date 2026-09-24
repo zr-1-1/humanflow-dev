@@ -1,0 +1,3 @@
+.hf-decision-card { border-left:2px solid var(--hf-success); }
+.hf-decision-card__statement { margin:0 0 7px; font-weight:var(--hf-weight-semibold); }
+.hf-decision-card__formula { margin:0; padding:6px 8px; border-radius:var(--hf-radius-sm); background:var(--hf-code-bg); font-family:var(--hf-font-code); }

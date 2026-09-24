@@ -1,0 +1,18 @@
+.hf-proposal-card .hf-card__header {
+  background: color-mix(in srgb, var(--hf-status-proposed) 5%, transparent);
+}
+.hf-proposal-card__summary {
+  margin: 0 0 var(--hf-space-4);
+  font-size: var(--hf-text-emphasis);
+  font-weight: var(--hf-weight-medium);
+}
+.hf-proposal-card__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--hf-space-3) var(--hf-space-5);
+}
+.hf-proposal-card__grid > div:first-child { grid-column: 1 / -1; }
+@media (max-width: 520px) {
+  .hf-proposal-card__grid { grid-template-columns: 1fr; }
+  .hf-proposal-card__grid > div:first-child { grid-column: auto; }
+}
