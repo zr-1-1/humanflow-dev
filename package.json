@@ -1,0 +1,103 @@
+{
+  "name": "humanflow",
+  "displayName": "HumanFlow",
+  "description": "持续讨论项目任务，关注代码并审查、部分接受跨文件建议。",
+  "version": "0.4.1",
+  "publisher": "humanflow-local",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zr-1-1/HumanFlow.git"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "main": "./src/vscode/extension.cjs",
+  "activationEvents": [
+    "onCommand:humanflow.open"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "humanflow.setTavilyApiKey",
+        "title": "HumanFlow: 设置 Tavily API Key"
+      },
+      {
+        "command": "humanflow.clearTavilyApiKey",
+        "title": "HumanFlow: 删除已保存的 Tavily API Key"
+      },
+      {
+        "command": "humanflow.open",
+        "title": "HumanFlow: 打开项目任务"
+      },
+      {
+        "command": "humanflow.setDeepSeekApiKey",
+        "title": "HumanFlow: 设置 DeepSeek API Key"
+      },
+      {
+        "command": "humanflow.clearDeepSeekApiKey",
+        "title": "HumanFlow: 删除已保存的 DeepSeek API Key"
+      },
+      {
+        "command": "humanflow.showFailedResponse",
+        "title": "HumanFlow: 查看最近失败响应"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "humanflow.open",
+          "when": "editorHasSelection && resourceScheme == file",
+          "group": "humanflow"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "HumanFlow",
+      "properties": {
+        "humanflow.webProxy": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "联网搜索和网页读取使用的代理，例如 http://127.0.0.1:8080；留空沿用 VS Code http.proxy 或 HTTP(S)_PROXY，无配置时直连。不修改系统代理。"
+        },
+        "humanflow.provider": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "deepseek"
+          ],
+          "default": "codex",
+          "scope": "machine",
+          "description": "新工作区默认模型服务；面板可按任务切换。codex 沿用现有配置，deepseek 使用独立子进程参数连接官方接口。"
+        },
+        "humanflow.nodePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Node.js 可执行文件路径；留空从 PATH 查找（不要填 VS Code 或 Electron 路径）。"
+        },
+        "humanflow.codexJsPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "可选的 Codex bin/codex.js 绝对路径；留空使用 npm 全局安装。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:extension": "node scripts/test-extension.mjs",
+    "package": "node scripts/package-extension.mjs",
+    "test:ui": "node scripts/test-ui.mjs",
+    "test:harness": "node scripts/test-harness-context.mjs",
+    "benchmark:context": "node scripts/benchmark-context.mjs"
+  }
+}

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src {{csp}}; script-src 'nonce-{{nonce}}';">
+<link rel="stylesheet" href="{{style}}"><title>HumanFlow</title></head>
+<body><header class="task-header"><h2 id="task-title">HumanFlow 项目任务</h2>
+<div class="actions"><button id="new-task">新建任务</button><button id="restore-task">恢复任务</button><button id="delete-task">删除任务记录</button></div>
+</header>
+<div class="workspace">
+<details id="outline-panel" open><summary>对话目录 <span id="round-count">0</span></summary><nav id="outline" aria-label="按用户请求定位"></nav></details>
+<main id="conversation" tabindex="-1">
+<nav class="view-tabs" aria-label="工作区视图"><button id="tab-discuss" aria-selected="true">讨论</button><button id="tab-changes" aria-selected="false">修改</button><button id="tab-findings" aria-selected="false">问题与验证</button></nav>
+<details id="task-plan"><summary>高级设置（可选）</summary>
+<p class="hint">直接发送需求即可开始，无需填写以下设置。</p>
+<details id="goal-settings"><summary>调整任务目标</summary>
+<label for="goal">任务目标</label><textarea id="goal" rows="2" maxlength="12000"></textarea>
+</details>
+<details id="budget-settings"><summary>限制修改范围（可选）</summary>
+<label><input id="budget-enabled" type="checkbox">启用额外修改限制</label>
+<div id="budget-fields" hidden>
+<label for="budget-paths">允许修改的相对文件或目录（每行一个；空白允许整个项目）</label><textarea id="budget-paths" rows="2"></textarea>
+<div class="budget-controls"><label>文件数 <input id="budget-files" type="number" min="0" max="12" placeholder="不额外限制"></label><label>替换后行数 <input id="budget-added" type="number" min="0" max="100000" placeholder="不限制"></label><label>替换前行数 <input id="budget-removed" type="number" min="0" max="100000" placeholder="不限制"></label></div>
+<p class="hint">按替换片段的完整前后行数保守计数，不是最小 Diff 行数。仅检查已填写的限制，留空不额外限制。</p>
+</div></details>
+<details id="thread-settings"><summary>线程策略（默认无需调整）</summary>
+<label for="thread-mode">线程策略</label><select id="thread-mode"><option value="rebuild">逐轮精简重建（默认）</option><option value="continuous">持续线程（实验；本地持久化线程）</option></select></details><button id="save-plan">保存可选设置</button>
+<details id="decision-settings"><summary>固定决策（可选）</summary>
+<div id="decisions"></div><label for="decision-text">固定决策（保存表示用户确认）</label><textarea id="decision-text" rows="2" maxlength="4000"></textarea><button id="add-decision">确认并固定</button><button id="cancel-decision">取消编辑</button></details></details>
+<details id="context-panel"><summary>本轮上下文与 Harness 用量</summary><pre id="context-details"></pre><button id="compact-thread">主动压缩（会请求模型）</button><button id="reset-thread">下轮重建线程</button></details>
+<details id="settings-panel"><summary>模型与任务设置 <span id="model-summary" class="hint"></span></summary>
+<div class="model-controls"><label for="web-provider">搜索服务</label><select id="web-provider"><option value="duckduckgo">DuckDuckGo（免 Key，可能限流）</option><option value="tavily">Tavily（需 Key，使用账户额度）</option></select><button id="search-key">设置 Tavily Key</button></div>
+<p class="hint">在输入区勾选联网搜索后生效。搜索词发送给所选服务，读取网页会访问目标网站；来源与失败原因保存在本轮讨论。代理可在 VS Code 设置 humanflow.webProxy 中填写。</p>
+<div class="model-controls"><label for="provider">模型服务</label><select id="provider"><option value="codex">当前 Codex 配置</option><option value="deepseek">DeepSeek 官方（经 Codex）</option></select><button id="deepseek-key">设置 DeepSeek Key</button></div>
+<p class="hint">下一轮会将本任务历史与项目上下文发送给所选服务；切换服务保留讨论，使旧候选失效。</p>
+<div class="model-controls"><label for="model">模型</label><select id="model"></select><label for="effort">推理强度</label><select id="effort"></select><button id="models">刷新模型</button></div>
+</details>
+<details id="focus-panel"><summary>代码关注点 <span id="focus-summary" class="hint"></span></summary>
+<button id="bind">更新关注点（保留讨论）</button><button id="open-focus">打开关注文件</button>
+<p id="scope">尚未绑定代码</p><details><summary>已绑定的代码</summary><pre id="selected"></pre></details>
+</details>
+<p id="status" role="status" aria-live="polite"></p>
+<details id="progress-panel"><summary>本轮思考摘要与操作 <span id="progress-count" class="hint"></span></summary><p class="hint">仅展示服务端提供的摘要和操作事件；未返回摘要时仅显示操作。最多保留最近 60 项。</p><div id="progress" class="bounded-content"></div></details>
+<div class="history-toolbar"><span>讨论记录</span><button id="collapse-rounds" type="button">收起全部</button><button id="expand-rounds" type="button">展开全部</button></div>
+<section id="history" aria-label="讨论记录"></section><button id="load-history" type="button">加载更早的讨论正文</button>
+<details id="findings-panel"><summary>项目问题 <span id="findings-count" class="hint"></span></summary><div id="findings"></div></details>
+<details id="checks-panel"><summary>可选运行验证 <span id="checks-count" class="hint"></span></summary><div id="checks"></div></details>
+<section id="candidate" hidden><h3>本批文件修改 · 尚未应用</h3><p id="batch-model"></p><div id="files"></div>
+<p id="batch-stats"></p><p id="budget-errors" role="status"></p><div id="dependency-notes"></div>
+<details><summary>可选：第二模型审查（额外用量）</summary><label>审查模型 <select id="review-model"></select></label><label>强度 <select id="review-effort"></select></label><button id="review">审查勾选修改</button><p id="review-result"></p></details>
+<p>部分接受不会自动检查代码依赖：请一并检查接口、调用方和测试。应用后旧批次失效。</p>
+<label><input id="dependencies" type="checkbox">我已检查所选修改的关联依赖</label>
+<p><button id="apply" disabled>应用并保存勾选修改</button></p></section>
+<section id="batch-history"><h3>历史批次（只读）</h3><div id="batch-records"></div></section>
+<section id="validation-history"><h3>验证记录</h3><div id="validation-records"></div><details><summary>分析选取的错误输出</summary><label for="feedback-record">关联验证</label><select id="feedback-record"></select><textarea id="feedback-text" rows="4" maxlength="7000" placeholder="粘贴必要错误片段；不自动采集终端"></textarea><button id="preview-feedback">遮盖常见凭据并预览</button><p class="hint">最多发送预览中的 7000 字符。自动遮盖不能识别全部敏感信息，请核对预览。</p><pre id="feedback-preview"></pre><button id="send-feedback" disabled>确认发送预览内容，仅分析</button></details></section></main></div>
+<footer class="composer"><div class="composer-heading"><label for="question">需求或追问</label><label title="允许模型搜索公开技术关键词、读取公开网页；搜索词发送给所选搜索服务。"><input id="web-enabled" type="checkbox">联网搜索（实验）</label><button id="latest" type="button">回到最新</button></div>
+<form id="form"><textarea id="question" rows="3" maxlength="12000" placeholder="例如：帮我补充这一段，并解释关键 API 的作用"></textarea>
+<label for="intent">本轮意图</label><select id="intent"><option value="discuss">讨论 / 提出候选</option><option value="explain">仅解释（拒绝修改候选）</option><option value="inspect">仅审查（拒绝修改候选）</option></select><div class="actions"><button id="send" type="submit">发送</button><button id="cancel" type="button" disabled>取消</button></div></form>
+<details class="save-hint"><summary>应用与保存说明</summary><p class="hint">AI 只生成建议；点击应用后，插件只修改并保存勾选项涉及的文件。这些文件已有的未保存内容也会一起保存，可随后手动调整。保存时可能触发你的格式化设置。</p></details></footer>
+<script nonce="{{nonce}}" src="{{markdown}}"></script><script nonce="{{nonce}}" src="{{workspace}}"></script><script nonce="{{nonce}}" src="{{script}}"></script></body></html>

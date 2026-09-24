@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [{
+    "name": "运行 HumanFlow 扩展",
+    "type": "extensionHost",
+    "request": "launch",
+    "args": ["--extensionDevelopmentPath=${workspaceFolder}", "--disable-extensions"]
+  }, {
+    "name": "诊断 HumanFlow 弃用警告",
+    "type": "extensionHost",
+    "request": "launch",
+    "args": ["--extensionDevelopmentPath=${workspaceFolder}", "--disable-extensions"],
+    "env": { "NODE_OPTIONS": "--trace-deprecation" }
+  }]
+}
