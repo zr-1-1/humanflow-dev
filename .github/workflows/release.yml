@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已存在的标签，例如 v0.4.1
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发布 VSIX
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - run: npm run package
+      - name: 创建 GitHub Release 并附加 VSIX
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$TAG" dist/*.vsix --title "HumanFlow $TAG" --generate-notes

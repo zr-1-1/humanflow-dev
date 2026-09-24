@@ -4,6 +4,18 @@
   "description": "持续讨论项目任务，关注代码并审查、部分接受跨文件建议。",
   "version": "0.4.1",
   "publisher": "humanflow-local",
+  "icon": "icon.png",
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "codex",
+    "ai",
+    "code review",
+    "pair programming",
+    "context"
+  ],
   "private": true,
   "license": "MIT",
   "repository": {

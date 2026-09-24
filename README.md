@@ -3,6 +3,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.95-007ACC.svg)](https://code.visualstudio.com/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
+[![CI](https://github.com/zr-1-1/humanflow-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/zr-1-1/humanflow-dev/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/zr-1-1/humanflow-dev)](https://github.com/zr-1-1/humanflow-dev/releases)
 
 HumanFlow 把 Codex 变成 VS Code 里的项目任务协作者：模型负责讨论、解释并给出候选修改，**是否应用、应用哪些片段始终由你决定**。任务目标与已确认的固定决策会跨轮保留，不受上下文裁剪和线程压缩影响。
 
@@ -194,6 +196,7 @@ docs/           设计文档、交付记录与使用说明
 ## 文档
 
 - [任务目标与固定决策说明](docs/HumanFlow_任务目标与固定决策说明.md)
+- [更新日志](CHANGELOG.md)
 - [0.4.0 实施记录](docs/HumanFlow_0.4.0_Delivery.md)
 - [DeepSeek 兼容接入](docs/DeepSeek_Compatibility.md)
 - [后续实施计划](docs/HumanFlow_Next_Steps.md)
