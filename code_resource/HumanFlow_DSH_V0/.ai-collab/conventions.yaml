@@ -1,0 +1,19 @@
+# HumanFlow engineering conventions
+# 只记录长期稳定、会影响正确性的工程约定。不要放普通代码风格。
+
+units:
+  position: TODO
+  velocity: TODO
+  angle: TODO
+
+coordinates:
+  convention: TODO
+  frames:
+    - TODO
+
+attitude:
+  quaternion_order: TODO
+  quaternion_definition: TODO
+
+protected_interfaces:
+  - TODO

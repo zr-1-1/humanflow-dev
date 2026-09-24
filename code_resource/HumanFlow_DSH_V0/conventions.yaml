@@ -1,0 +1,195 @@
+# HumanFlow engineering conventions
+# 本文件只记录会影响工程正确性、跨文件一致性和 AI 审查判断的长期约定。
+# 若本文件与临时实现、变量命名或 AI 推断冲突，以本文件为准；
+# 若确需改变这些约定，应先由人工确认并更新 decisions.md。
+
+schema_version: 0.1
+
+# ============================================================
+# 1. 内部计算单位
+# ============================================================
+
+units:
+  policy: "internal_SI"
+
+  # 除明确标注的外部接口/历史兼容字段外，项目内部计算优先采用国际单位制。
+  internal:
+    position: "m"
+    distance: "m"
+    altitude: "m"
+    velocity: "m/s"
+    acceleration: "m/s^2"
+    time: "s"
+    mass: "kg"
+    force: "N"
+    angular_rate: "rad/s"
+
+  angles:
+    # 所有内部数学计算、算法接口和中间变量原则上统一使用弧度。
+    computation: "rad"
+
+    # 最终展示单位不在底层算法中固定，由用户/上层呈现逻辑决定。
+    presentation: "user_decides"
+
+    # 不允许 AI 因“显示习惯”在算法内部擅自将 rad 改成 deg。
+    do_not_infer_display_unit_into_computation: true
+
+  boundary_policy:
+    # 外部系统、legacy 字段、STK/TLE/OMM 等若规定为 deg、km 等，
+    # 必须在明确的边界层进行转换，进入内部计算后恢复 canonical 单位。
+    convert_at_boundary: true
+    preserve_external_specification: true
+    no_silent_unit_conversion: true
+
+# ============================================================
+# 2. 坐标系与旋转矩阵
+# ============================================================
+
+coordinates:
+  vector_convention:
+    # 列向量。
+    vector_form: "column"
+
+  dcm:
+    # 统一下标规则：
+    # C_ab 表示“将 b 系分量变换为 a 系分量”的方向余弦矩阵。
+    #
+    #     x_a = C_ab * x_b
+    #
+    # 因此：
+    # C_ba 表示 a -> b 的分量变换。
+    notation: "C_ab maps components from frame b to frame a"
+    defining_equation: "x_a = C_ab * x_b"
+
+    inverse_relation: "C_ba = transpose(C_ab)"
+    orthonormal_expected: true
+
+    # AI 不得仅凭变量名猜测方向，必须结合 defining_equation、
+    # 当前变量实际参考系和项目文档判断。
+    require_frame_check_before_suggesting_transpose: true
+
+# ============================================================
+# 3. 单轴旋转与欧拉角
+# ============================================================
+
+rotation:
+  positive_direction:
+    # 从 +旋转轴 朝原点观察，逆时针为正。
+    rule: "counterclockwise when viewed from +axis toward origin"
+
+  elementary_matrices:
+    # 项目采用如下符号约定。
+    # 例如绕 z 轴：
+    #
+    # Cz = [ cos(phi)  sin(phi)  0
+    #       -sin(phi)  cos(phi)  0
+    #        0         0         1 ]
+    #
+    # 若 b 系由 a 系绕 +z 轴旋转 +phi 得到，则：
+    # x_b = Cz * x_a
+    z_axis_matrix: |
+      [ cos(phi),  sin(phi), 0;
+       -sin(phi),  cos(phi), 0;
+        0,         0,        1 ]
+
+  euler:
+    # 名称顺序表示坐标系逐次旋转顺序。
+    # 示例：EulerZXZ
+    # b 初始与 a 重合：
+    # 1) b 绕 a 系 Z 轴转第一个角；
+    # 2) 再绕中间 1 系 X 轴转第二个角；
+    # 3) 再绕中间 2 系 Z 轴转第三个角。
+    intrinsic_frame_sequence: true
+
+    example_ZXZ:
+      dcm_relation: "C_ba = Cz2 * Cx * Cz1"
+
+# ============================================================
+# 4. 欧拉轴角
+# ============================================================
+
+axis_angle:
+  axis_symbol: "n_ba_a"
+  angle_symbol: "alpha"
+
+  # n_ba_a：
+  # b 系初始与 a 系重合，旋转轴 n_ba 用 a 系分量表示；
+  # b 系绕该轴旋转 alpha 后得到最终 b 系。
+  axis_representation_frame: "a"
+
+  positive_angle_rule: "counterclockwise when viewed from +n toward origin"
+
+  # 项目约定对应：
+  #
+  # nx = skew(n_ba_a)
+  # C_ba = cos(alpha) I
+  #      + (1-cos(alpha)) n n^T
+  #      - sin(alpha) nx
+  dcm_formula: "C_ba = cos(alpha)*I + (1-cos(alpha))*n*n^T - sin(alpha)*skew(n)"
+
+# ============================================================
+# 5. 四元数
+# ============================================================
+
+attitude:
+  quaternion:
+    notation: "q_ab"
+
+    # q_ab 表示 b 系相对于 a 系的姿态；
+    # 与当前项目文档规范保持一致。
+    physical_meaning: "attitude of frame b relative to frame a"
+
+    order: "scalar_first"
+    storage: "[q0, q1, q2, q3]^T"
+
+    # 共轭关系
+    conjugate_relation: "q_ba = [q_ab(1); -q_ab(2:4)]"
+
+    # 向量从 a 系分量变换到 b 系分量时，项目现有公式：
+    #
+    # temp = q_ba * v_a
+    # v_b  = temp * q_ab
+    #
+    # 其中纯四元数 v = [0; vx; vy; vz]。
+    vector_transform:
+      from_frame: "a"
+      to_frame: "b"
+      formula: "v_b = q_ba ⊗ v_a ⊗ q_ab"
+
+    # q_ab 对应的 C_ba：
+    #
+    # q0 = scalar
+    # q  = vector part
+    # qx = skew(q)
+    #
+    # C_ba = (q0^2 - q^T q) I - 2 q0 qx + 2 q q^T
+    dcm_relation:
+      dcm: "C_ba"
+      formula: "C_ba = (q0^2-q^T*q)*I - 2*q0*skew(q) + 2*q*q^T"
+
+    # 当前文档指出该定义与 STK 中对应表示方向相反：
+    # Qba(STK) = q_ab(project)
+    stk_relation:
+      relation: "Qba_STK = q_ab_project"
+      status: "project_document_convention"
+      caution: "Do not assume STK quaternion direction without checking the specific STK API/report definition."
+
+# ============================================================
+# 6. STK / TLE / OMM 边界
+# ============================================================
+
+external_interfaces:
+  stk:
+    # STK 输入输出字段的单位和参考系，以具体接口/报表文档为准；
+    # 不要求外部接口强行使用项目内部 SI 表示。
+    unit_policy: "follow_STK_field_definition_at_boundary"
+    convert_to_internal_units_after_read: true
+    convert_from_internal_units_before_write: true
+
+  tle:
+    propagation: "SGP4"
+    file_requirement: "plain_file"
+
+  omm:
+    propagation: "SGP4"
+    file_requirement: "plain_file"

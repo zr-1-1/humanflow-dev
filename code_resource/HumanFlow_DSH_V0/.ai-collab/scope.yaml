@@ -1,0 +1,13 @@
+# V0 是软 Scope：由 Skill 约束。
+# V0.2 再做 tools/pre-execute 原生插件硬约束。
+
+mode: audit
+
+allowed_files: []
+
+allowed_symbols: []
+
+max_diff_lines: 80
+
+allow_interface_change: false
+allow_new_dependency: false
