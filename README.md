@@ -129,7 +129,50 @@ npm run package
 | `humanflow.provider` | 新工作区的默认模型服务：`codex` 或 `deepseek` | `codex` |
 | `humanflow.webProxy` | 联网工具使用的代理，例如 `http://127.0.0.1:8080`；留空沿用 VS Code `http.proxy` 或 `HTTP(S)_PROXY` | 空 |
 
-模型与推理强度、搜索服务、服务切换在面板内按任务设置，不写入全局 Codex 配置。使用 DeepSeek 时密钥存入 VS Code SecretStorage；也可在启动 VS Code 前设置 `DEEPSEEK_API_KEY`。
+### 查询路径的常用命令
+
+`humanflow.nodePath`（Node.js 可执行文件，需 18 或更高）：
+
+| 平台 | 命令 | 预期示例 |
+| --- | --- | --- |
+| Windows（PowerShell） | `(Get-Command node).Source` | `D:\Program Files\nodejs\node.exe` |
+| Windows（cmd） | `where node` | 同上，取第一行 |
+| macOS / Linux | `which node` | `/usr/local/bin/node` |
+
+必须是 Node 本体；不要填 VS Code 自带的 `Code.exe`／`electron`，也不要填 `npm.cmd`、`npx`。`node --version` 能打印版本就说明该路径可用；留空时从 `PATH` 查找 `node`。
+
+`humanflow.codexJsPath`（Codex 的 `bin/codex.js` 绝对路径）：
+
+| 步骤 | Windows（PowerShell） | macOS / Linux |
+| --- | --- | --- |
+| 看全局安装根目录 | `npm root -g` | `npm root -g` |
+| 确认已安装 | `npm ls -g --depth=0`（应出现 `@openai/codex`） | 同左 |
+| 得到要填的路径 | `Join-Path (npm root -g) '@openai\codex\bin\codex.js'` | `$(npm root -g)/@openai/codex/bin/codex.js` |
+| 确认文件存在 | `Test-Path (Join-Path (npm root -g) '@openai\codex\bin\codex.js')` | `ls "$(npm root -g)/@openai/codex/bin/codex.js"` |
+| 只看启动器位置 | `where codex` | `which codex` |
+
+这一项必须是 `codex.js`；`codex.cmd`、`codex.ps1` 或独立安装包里的 `codex.exe` 都不行（独立安装目录通常没有 `codex.js`，需要另装 npm 全局包，或用 `npm i -g @openai/codex` 安装）。留空时依次查找：`%APPDATA%\npm\node_modules\@openai\codex\bin\codex.js` → `PATH` 各级目录下的 `node_modules/@openai/codex/bin/codex.js` → 上述目录上级的 `lib/node_modules/@openai/codex/bin/codex.js` → `~/.npm-global/lib/node_modules/@openai/codex/bin/codex.js`；环境变量 `HUMANFLOW_CODEX_JS` 也可指定同一路径。
+
+`humanflow.webProxy`（仅影响 HumanFlow 的联网工具，不改系统代理）：
+
+| 目的 | Windows（PowerShell） | macOS / Linux |
+| --- | --- | --- |
+| 端口是否在监听 | `Test-NetConnection 127.0.0.1 -Port 16991` | `nc -vz 127.0.0.1 16991` |
+| 用该代理试一次 | `curl.exe -x http://127.0.0.1:16991 -sI https://github.com` | `curl -x http://127.0.0.1:16991 -sI https://github.com` |
+| 查看环境变量 | `$env:HTTPS_PROXY` | `echo $HTTPS_PROXY` |
+
+留空时的取值顺序：`humanflow.webProxy` → VS Code 设置 `http.proxy` → `HTTPS_PROXY`／`https_proxy` → `HTTP_PROXY`／`http_proxy`。
+
+`humanflow.provider`（新工作区默认模型服务）：
+
+| 取值 | 需要准备 | 自检 |
+| --- | --- | --- |
+| `codex` | 已安装并完成认证的 Codex CLI | `codex --version` |
+| `deepseek` | DeepSeek API Key（面板内设置，存入 VS Code SecretStorage；也可在启动 VS Code 前设置 `DEEPSEEK_API_KEY`） | `$env:DEEPSEEK_API_KEY`（PowerShell） |
+
+改完设置后在面板「模型与任务设置」点“刷新模型”可确认能否连通；失败时执行命令 **HumanFlow: 查看最近失败响应** 查看原始返回。
+
+模型与推理强度、搜索服务、服务切换在面板内按任务设置，不写入全局 Codex 配置。
 
 ## 上下文与数据
 
