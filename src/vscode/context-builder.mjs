@@ -32,7 +32,7 @@ export function buildContext(task, request, buffers, historyLimit = 24000, { con
   }
   const files = buffers.map(file => ({ ...file, ...(typeof file.text === 'string' ? { version: contentVersion(file.text) } : {}) }));
   const payload = { request, task: { title: task.title, goal: task.goal, decisions: task.decisions ?? [], budget: task.budget?.enabled === true ? task.budget : undefined,
-    history, findings: task.findings.filter(item => !['resolved', 'dismissed'].includes(item.status)), omittedHistoryEntries: omitted, outcomes,
+    history, findings: task.findings.filter(item => !['resolved', 'dismissed'].includes(item.status)).map(({ anchor, ...item }) => item), omittedHistoryEntries: omitted, outcomes,
     validations: (task.validations ?? []).slice(-10) }, focus, editorBuffers: files,
     instructions: '当前 editorBuffers 优先于磁盘和线程旧内容。每轮重新读取所需磁盘文件；手动编辑和撤销可能使旧代码失效。task.goal/decisions/findings 是本轮完整状态，已从列表撤销的固定决策不再生效。历史候选不等于已应用，实际结果见 outcomes。省略历史不代表没有更早讨论。固定决策的来源与确认状态不能混淆。只围绕当前请求，简单问题简短回答。' };
   const prompt = JSON.stringify(payload);

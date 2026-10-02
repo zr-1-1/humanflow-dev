@@ -4,7 +4,9 @@ const { join, resolve, basename, extname } = require('node:path');
 const { readFileSync, realpathSync } = require('node:fs');
 const { randomBytes } = require('node:crypto');
 // 面板 JS 每次打开面板都从磁盘读取，可能比正在运行的扩展宿主更新；用协议号识别这种不一致。
-const PANEL_PROTOCOL = 2;
+const PANEL_PROTOCOL = 3;
+// 开发者指令变化后重建持久线程，避免继续使用旧审查规则。
+const SUGGESTION_POLICY_VERSION = 1;
 let shutdown = async () => {};
 exports.deactivate = () => shutdown();
 
@@ -39,7 +41,7 @@ exports.activate = async context => {
   };
   const { captureBuffer } = await load('src/vscode/selection.mjs');
   const { prepareBatch, assertBatchCurrent, batchChanges, assertAbsent, candidateChangePage, changePageComment, identifierSpans, supportsIdentifierSpans } = await load('src/codex/change-batch.mjs');
-  const { captureBaseline, assertBaseline, resolveReferences, addFindings, updateFinding } = await load('src/vscode/workflow.mjs');
+  const { captureBaseline, assertBaseline, resolveReferences, addFindings, updateFinding, locateFinding, findingContext } = await load('src/vscode/workflow.mjs');
   const { runValidation } = require('./validation.cjs');
   let baseline, references = [], validationExecution;
   const drafts = new Map();
@@ -86,6 +88,22 @@ exports.activate = async context => {
   let generation = 0, storageQueue = Promise.resolve(), navigating = false;
   let batch = [];
   const readText = async path => (await vscode.workspace.openTextDocument(vscode.Uri.file(path))).getText();
+  const refreshFindingLocations = async (owner, { initialize = new Set(), path } = {}) => {
+    const grouped = new Map();
+    for (const finding of owner.findings ?? []) {
+      const target = resolve(owner.root, finding.path);
+      if (path && !samePath(target, path)) continue;
+      if (!grouped.has(target)) grouped.set(target, []);
+      grouped.get(target).push(finding);
+    }
+    for (const [target, findings] of grouped) {
+      try {
+        if (!inside(realpathSync(owner.root), realpathSync(target))) throw new Error('问题文件不属于项目');
+        const text = await readText(target);
+        for (const finding of findings) locateFinding(finding, text, { initialize: initialize.has(finding.id) });
+      } catch { for (const finding of findings) finding.locationStatus = 'stale'; }
+    }
+  };
   let panel, snapshot, sourceUri, client, threadId, controller;
   let busy = false, applying = false;
   let state = { scope: '', selected: '', status: task ? '已恢复任务；下轮根据当前代码重建上下文，旧候选不恢复。' : '可直接讨论项目，也可选择代码作为关注点。', history: task?.history ?? [], suggestion: null, stale: false };
@@ -185,7 +203,7 @@ exports.activate = async context => {
     state.selected = task?.focus?.selected ?? '';
     if (task) {
       task.choice = { ...choice }; task.provider = provider;
-      const signature = JSON.stringify(tasks);
+      const signature = JSON.stringify({ tasks, activeTask: task.id });
       if (signature !== savedSignature) {
       savedSignature = signature;
       const data = structuredClone(tasks), id = task.id;
@@ -240,6 +258,7 @@ exports.activate = async context => {
     provider = task.provider ?? 'codex';
     if (task.focus) task.focus = { path: task.focus.path };
     choice = task.choice ?? {}; snapshot = null;
+    await refreshFindingLocations(task);
     sourceUri = task.focus ? vscode.Uri.file(task.focus.path) : null;
     invalidate(); state.status = '任务已恢复；下轮重建上下文并核对当前代码。'; publish();
     if (changedProvider) { models = []; await refreshModels(); }
@@ -299,11 +318,12 @@ exports.activate = async context => {
     invalidate(); state.status = '关注点已更新，任务讨论保留。';
     publish();
   };
-  const ask = async (question, findingId, intent = 'discuss') => {
+  const ask = async (question, findingId, intent = 'discuss', findingIds = []) => {
     if (busy || loadingModels) return;
     const turnChoice = selectModel(models, choice.model, choice.effort);
     if (!task) throw new Error('请先打开本地项目并新建任务');
     if (typeof question !== 'string' || !question.trim() || question.length > 12000) throw new Error('请输入不超过 12000 字符的需求');
+    if (!Array.isArray(findingIds) || findingIds.length > 50 || findingIds.some(id => !task.findings.some(item => item.id === id))) throw new Error('所选问题已变化，请重新选择（最多 50 个）');
     busy = true;
     controller = new AbortController();
     invalidate();
@@ -312,12 +332,18 @@ exports.activate = async context => {
     const assertFresh = () => { if (controller.signal.aborted || generation !== turnGeneration) throw new Error('请求已取消或项目编辑状态变化'); };
     const round = startTurn(task, question);
     task.draft = ''; task.updatedAt = Date.now();
-    const sessionKey = JSON.stringify([task.id, task.root, provider, turnChoice.model, turnChoice.effort, task.webEnabled]);
+    const sessionKey = JSON.stringify([SUGGESTION_POLICY_VERSION, task.id, task.root, provider, turnChoice.model, turnChoice.effort, task.webEnabled]);
     const continuous = task.threadMode === 'continuous' && !task.webEnabled;
     let resumed = false;
     state.status = `正在生成建议 · ${turnChoice.model} / ${turnChoice.effort ?? '默认强度'}……`;
     publish();
     try {
+      await refreshFindingLocations(task);
+      if (findingIds.length) {
+        const selected = [...new Set(findingIds)].map(id => findingContext(task.findings.find(item => item.id === id)));
+        question += '\n\n本轮选中讨论的问题（位置待确认时先重新定位，不把旧行号当作当前事实）：\n' + JSON.stringify(selected);
+        task.history.find(entry => entry.turnId === round.id && entry.role === '你').text = question;
+      }
       // 每轮显式重建上下文，避免把未接受的历史建议当作现有代码。
       if (!continuous || task.session?.key !== sessionKey) { await resetClient(); task.session = null; }
       snapshot = null;
@@ -396,6 +422,11 @@ exports.activate = async context => {
       if (controller.signal.aborted) throw new Error('已取消');
       await assertBatchCurrent(nextBatch, readText);
       assertFresh();
+      const findingUpdate = { root: task.root, findings: structuredClone(task.findings) };
+      addFindings(findingUpdate, suggestion.findings);
+      await refreshFindingLocations(findingUpdate, { initialize: new Set(findingUpdate.findings.filter(item => !item.anchor && !item.locationStatus).map(item => item.id)) });
+      assertFresh();
+      task.findings = findingUpdate.findings;
       batch = nextBatch;
       state.suggestion = { ...suggestion, provider, batchId: randomBytes(12).toString('hex'), changes: batchChanges(batch), requestedModel: turnChoice.model, effort: turnChoice.effort };
       state.suggestion.findingId = findingId;
@@ -404,7 +435,6 @@ exports.activate = async context => {
       if (suggestion.repairs) state.suggestion.repairs = suggestion.repairs;
       round.status = batch.length ? 'pendingReview' : 'completed'; round.batchId = state.suggestion.batchId;
       task.batches.push({ id: state.suggestion.batchId, turnId: round.id, summary: suggestion.summary, changes: batchChanges(batch), status: round.status });
-      addFindings(task, suggestion.findings);
       task.checks = suggestion.checks.map(check => ({ ...check, batchId: state.suggestion.batchId, turnId: round.id }));
       state.history.push({ role: `AI · ${turnChoice.model} · ${turnChoice.effort ?? '默认强度'}`, text: `${suggestion.summary}\n\n${suggestion.explanation}\n\n验证说明：${suggestion.verification}` });
       if (batch.length) task.history.push({ role: '未应用候选', text: JSON.stringify(batchChanges(batch)) });
@@ -617,6 +647,7 @@ exports.activate = async context => {
       if (applying || uri.scheme !== 'file') return;
       let changed = false;
       for (const item of tasks) if (inside(item.root, uri.fsPath)) {
+        void refreshFindingLocations(item, { path: uri.fsPath }).then(() => publish());
         for (const validation of item.validations) if (!validation.stale) { validation.stale = true; changed = true; }
       }
       if (task && inside(task.root, uri.fsPath) && validationExecution) generation++;
@@ -625,6 +656,13 @@ exports.activate = async context => {
     context.subscriptions.push(watcher, watcher.onDidChange(changedOnDisk), watcher.onDidCreate(changedOnDisk), watcher.onDidDelete(changedOnDisk));
   }
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
+    if (event.document.uri.scheme === 'file' && event.contentChanges.length) {
+      for (const owner of tasks) for (const finding of owner.findings ?? []) {
+        if (samePath(resolve(owner.root, finding.path), event.document.uri.fsPath)) locateFinding(finding, event.document.getText());
+      }
+      // 应用候选和保存格式化同样更新问题位置，不能被 applying 的防回调逻辑跳过。
+      if (applying || !task || !inside(task.root, event.document.uri.fsPath)) publish();
+    }
     if (applying || !task || event.document.uri.scheme !== 'file' || !inside(task.root, event.document.uri.fsPath) || !event.contentChanges.length) return;
     generation++;
     for (const validation of task.validations ?? []) validation.stale = true;
@@ -744,7 +782,16 @@ exports.activate = async context => {
       else if (message.type === 'fixFinding') {
         const finding = task?.findings.find(item => item.id === message.id);
         if (!finding) throw new Error('问题不存在');
-        await ask(`只处理以下问题，检查相关定义、调用方和测试，提出同一意图的候选批次。其他问题暂不修改：${JSON.stringify(finding)}`, finding.id);
+        await ask('只处理选中问题，检查相关定义、调用方和测试，提出同一意图的候选批次。其他问题暂不修改。', finding.id, 'discuss', [finding.id]);
+      }
+      else if (message.type === 'openFinding') {
+        const owner = task, finding = owner?.findings.find(item => item.id === message.id);
+        if (!finding) throw new Error('问题不存在');
+        await refreshFindingLocations(owner, { path: resolve(owner.root, finding.path) });
+        if (task !== owner) return;
+        publish();
+        if (finding.locationStatus !== 'current') throw new Error('问题对应代码已变化或无法唯一定位，请重新审查确认位置；问题处理状态未改变。');
+        await dispatch({ type: 'openFile', taskId: owner.id, path: `${finding.path}:${finding.line}` });
       }
       else if (message.type === 'openFile') {
         if (!task || typeof message.path !== 'string') throw new Error('文件不属于当前项目');
@@ -755,7 +802,7 @@ exports.activate = async context => {
         const line = Math.max(0, Math.min(doc.lineCount - 1, Number(match[2] ?? match[3] ?? 1) - 1));
         await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preview: true, selection: new vscode.Range(line, 0, line, 0) });
       }
-      else if (message.type === 'ask') await ask(message.question, undefined, ['explain', 'inspect'].includes(message.intent) ? message.intent : 'discuss');
+      else if (message.type === 'ask') await ask(message.question, undefined, ['explain', 'inspect'].includes(message.intent) ? message.intent : 'discuss', message.findingIds ?? []);
       else if (message.type === 'cancel') { controller?.abort(); validationExecution?.terminate(); }
       else if (message.type === 'preview') await preview(message.index, message.selection, message.batchId, message.mode === 'unified' ? 'unified' : 'diff');
       else if (message.type === 'apply') await apply(message);
@@ -786,6 +833,7 @@ exports.activate = async context => {
     } else panel.reveal(vscode.ViewColumn.Beside, true);
     try {
       if (!task) await newTask();
+      if (task) await refreshFindingLocations(task);
       const editor = vscode.window.activeTextEditor;
       if (editor?.document.uri.scheme === 'file' && !editor.selection.isEmpty) await bind();
       else publish();

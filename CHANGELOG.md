@@ -2,6 +2,20 @@
 
 本文档记录 HumanFlow 各版本对外可见的变化。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.3] - 2026-10-02
+
+### 新增
+
+- 支持直接使用 Codex 可执行文件：`humanflow.codexJsPath` 除 `codex.js` 外也可填 Codex 可执行文件（例如 Windows 桌面端自带的 `codex.exe`，同为 `codex-cli`），只装桌面端、没有 npm 全局包时同样可用，且此时不需要 Node。
+- 留空时的自动查找在原有 npm 全局位置之外，增加 Windows 桌面端 `%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe`（多个版本目录取最新的）。
+- 找不到 Codex 时的报错改为直接给出安装命令（`npm i -g @openai/codex`）与可填写的两个位置（`humanflow.codexJsPath`、`HUMANFLOW_CODEX_JS`），不再只提示环境变量名。
+- 仅审查模式增加轻量简化建议，提供替代方案和验证思路。
+- 问题列表支持勾选多个问题，一次性引用到讨论输入区。
+
+### 修复
+
+- 问题定位会随目标代码及邻近上下文变化而更新；无法唯一定位时提示重新确认，避免跳到过时的行号。
+
 ## [0.4.2] - 2026-09-24
 
 ### 变更

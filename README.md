@@ -10,7 +10,7 @@
 
 HumanFlow 把 Codex 变成 VS Code 里的项目任务协作者：模型负责讨论、解释并给出候选修改，**是否应用、应用哪些片段始终由你决定**。任务目标与已确认的固定决策会跨轮保留，不受上下文裁剪和线程压缩影响。
 
-> 当前版本：0.4.2（实验性）。已在 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow) 发布，也可从仓库 Releases 下载 VSIX 或自行打包。
+> 当前版本：0.4.3（实验性）。可从仓库 Releases 下载 VSIX 或自行打包。
 
 ## 特性
 
@@ -89,6 +89,12 @@ npm run package
 
 要求“全局检查，这轮只报告问题”时，结果会列出位置、依据和影响。你可以稍后处理、不采纳、标记为人工确认已解决，或选择“仅处理此问题”生成关联批次。
 
+选择“仅审查”时，会在缺陷检查之外附带轻量简化审查，关注重复实现、不必要的封装和可复用的原生能力。结果在同一列表标记为“缺陷”或“简化建议 · 可选”；简化建议提供具体替代方案和验证思路，可参与多选讨论，点击“提出简化候选”后再审查决定是否应用。没有明确依据时不强行提出简化，不以减少代码行数为目标，也不省略必要校验与测试。
+
+问题位置会根据目标代码及邻近上下文更新：插入、删除前面的代码后，行号随之调整；对应代码被改写、删除或无法唯一定位时显示“位置待确认”，不会把旧行号作为可靠跳转位置。重新打开任务、点击定位或发送讨论前会再次核对。旧版本记录缺少定位锚点，需要重新审查确认；位置变化不会自动把问题标记为已解决。
+
+在问题列表勾选多个问题，点击“讨论勾选问题”，可在输入区补充追问后一起发送。引用显示在输入框上方，可以移除；发送时会使用这些问题的最新位置和状态，保留完整依据，不会覆盖已有草稿。每次最多引用 50 个问题。
+
 “可选运行验证”展示模型建议的命令；核对命令、原因和项目根目录后再运行。命令通过 VS Code Tasks 执行，可能写文件或访问外部系统，模型本身不会执行它。退出码记录到讨论，完整输出留在任务终端；失败不会触发自动修复。
 
 ### 第二模型审查
@@ -125,7 +131,7 @@ npm run package
 | 设置 | 作用 | 默认值 |
 | --- | --- | --- |
 | `humanflow.nodePath` | Node.js 可执行文件路径；留空时从 `PATH` 查找，不要填 VS Code 自带的 Electron | 空 |
-| `humanflow.codexJsPath` | Codex 的 `bin/codex.js` 绝对路径；留空时使用 npm 全局安装 | 空 |
+| `humanflow.codexJsPath` | Codex 的 `bin/codex.js` 或 Codex 可执行文件绝对路径；留空自动查找 | 空 |
 | `humanflow.provider` | 新工作区的默认模型服务：`codex` 或 `deepseek` | `codex` |
 | `humanflow.webProxy` | 联网工具使用的代理，例如 `http://127.0.0.1:8080`；留空沿用 VS Code `http.proxy` 或 `HTTP(S)_PROXY` | 空 |
 
@@ -141,7 +147,7 @@ npm run package
 
 必须是 Node 本体；不要填 VS Code 自带的 `Code.exe`／`electron`，也不要填 `npm.cmd`、`npx`。`node --version` 能打印版本就说明该路径可用；留空时从 `PATH` 查找 `node`。
 
-`humanflow.codexJsPath`（Codex 的 `bin/codex.js` 绝对路径）：
+`humanflow.codexJsPath`（Codex 的 `bin/codex.js` 或 `codex.exe` 绝对路径）：
 
 | 步骤 | Windows（PowerShell） | macOS / Linux |
 | --- | --- | --- |
@@ -151,7 +157,7 @@ npm run package
 | 确认文件存在 | `Test-Path (Join-Path (npm root -g) '@openai\codex\bin\codex.js')` | `ls "$(npm root -g)/@openai/codex/bin/codex.js"` |
 | 只看启动器位置 | `where codex` | `which codex` |
 
-这一项必须是 `codex.js`；`codex.cmd`、`codex.ps1` 或独立安装包里的 `codex.exe` 都不行（独立安装目录通常没有 `codex.js`，需要另装 npm 全局包，或用 `npm i -g @openai/codex` 安装）。留空时依次查找：`%APPDATA%\npm\node_modules\@openai\codex\bin\codex.js` → `PATH` 各级目录下的 `node_modules/@openai/codex/bin/codex.js` → 上述目录上级的 `lib/node_modules/@openai/codex/bin/codex.js` → `~/.npm-global/lib/node_modules/@openai/codex/bin/codex.js`；环境变量 `HUMANFLOW_CODEX_JS` 也可指定同一路径。
+这一项可填写 `codex.js` 或 Codex 可执行文件（例如 Windows 桌面端的 `codex.exe`），不能填 `codex.cmd` / `codex.ps1`。留空时除 npm 全局安装位置外，还会查找 Windows 桌面端 `%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe`；环境变量 `HUMANFLOW_CODEX_JS` 也可指定路径。使用可执行文件时不需要单独配置 Node。
 
 `humanflow.webProxy`（仅影响 HumanFlow 的联网工具，不改系统代理）：
 

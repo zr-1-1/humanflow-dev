@@ -4,7 +4,20 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, writeFile, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureSelection, assertUnchanged, parseSuggestion, runSuggestionTurn, startSuggestionSession } from '../src/codex/suggestion-session.mjs';
+import { captureSelection, assertUnchanged, parseSuggestion, runSuggestionTurn, startSuggestionSession, suggestionSchema } from '../src/codex/suggestion-session.mjs';
+
+test('简化审查区分类别，保留替代方案并兼容旧响应', () => {
+  const finding = { path: 'a.js', line: 1, title: '复用已有实现', evidence: '两个调用点复制了同一逻辑', impact: '减少重复维护' };
+  const parse = item => parseSuggestion(JSON.stringify({ summary: '', explanation: '', verification: '', changes: [], findings: [item] })).findings[0];
+  assert.equal(parse(finding).category, 'defect');
+  const replacement = '复用 parseOptions，并用原调用点的边界输入验证输出一致。';
+  assert.equal(parse({ ...finding, category: 'simplification', replacement }).replacement, replacement);
+  assert.throws(() => parse({ ...finding, category: 'simplification' }), /替代方案/);
+  assert.throws(() => parse({ ...finding, category: 'simplification', replacement: '  ' }), /替代方案/);
+  assert.throws(() => parse({ ...finding, category: 'unknown' }), /类别/);
+  assert.ok(suggestionSchema.properties.findings.items.required.includes('category'));
+  assert.ok(suggestionSchema.properties.findings.items.required.includes('replacement'));
+});
 
 test('中文选区与文件过期检测', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'humanflow-test-'));
