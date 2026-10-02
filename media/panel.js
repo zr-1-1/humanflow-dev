@@ -36,7 +36,7 @@ const emptyState = (art, title, body) => {
 };
 const note = (text, className = 'hint') => { const node = document.createElement('p'); node.className = className; node.textContent = text; return node; };
 // 面板脚本每次打开面板都从磁盘读取，可能比正在运行的扩展宿主更新；协议号不一致时明确提示，避免静默走旧行为。
-const PANEL_PROTOCOL = 2;
+const PANEL_PROTOCOL = 3;
 let hostProtocol, protocolMismatch = true;
 const protocolWarning = note('', 'panel-alert'); protocolWarning.id = 'protocol-warning'; protocolWarning.hidden = true;
 get('status').before(protocolWarning);
@@ -152,7 +152,14 @@ const setReviewEfforts = () => {
 };
 get('review-model').onchange = setReviewEfforts;
 get('review').onclick = () => vscode.postMessage({ type: 'review', batchId: currentBatchId, selection, model: get('review-model').value, effort: get('review-effort').value });
-const updateApply = () => { get('apply').disabled = locked || !selection.some(items => items.length) || !get('dependencies').checked; };
+const applyHint = note('', 'hint review-guidance');
+get('review-bar').before(applyHint);
+const updateApply = () => {
+  const hasSelection = selection.some(items => items.length);
+  get('apply').disabled = locked || !hasSelection || !get('dependencies').checked;
+  applyHint.textContent = locked ? '当前批次暂不可应用，请查看上方状态。' : !hasSelection ? '先勾选要接受的片段，再预览修改。'
+    : !get('dependencies').checked ? '请先在批次说明中确认已检查关联依赖。' : '已准备好：仅应用并保存勾选的修改。';
+};
 get('dependencies').onchange = updateApply;
 get('apply').onclick = () => {
   if (get('apply').disabled) return;
@@ -315,7 +322,22 @@ const renderBatch = data => {
 
 // ── 问题、验证与批次记录 ─────────────────────────────────────────────
 const findingStatuses = [['open', '待处理'], ['deferred', '稍后处理'], ['dismissed', '不采纳'], ['pendingVerification', '待验证'], ['resolved', '已解决（人工确认）']];
+let selectedFindingIds = new Set(), findingsTaskId, findingsDisabled = false;
+const updateFindingSelection = () => {
+  get('finding-selection-count').textContent = `已勾选 ${selectedFindingIds.size} 个问题`;
+  get('discuss-findings').disabled = protocolMismatch || findingsDisabled || !selectedFindingIds.size;
+  get('clear-findings').disabled = !selectedFindingIds.size;
+};
+get('discuss-findings').onclick = () => { if (!protocolMismatch) workspace.discussFindings([...selectedFindingIds]); };
+get('clear-findings').onclick = () => {
+  selectedFindingIds.clear();
+  for (const box of get('findings').querySelectorAll('input[type="checkbox"]')) box.checked = false;
+  updateFindingSelection();
+};
 const renderFindings = (findings, disabled) => {
+  if (findingsTaskId !== historyTaskId) { selectedFindingIds.clear(); findingsTaskId = historyTaskId; }
+  selectedFindingIds = new Set([...selectedFindingIds].filter(id => findings.some(item => item.id === id)));
+  findingsDisabled = disabled; updateFindingSelection();
   if (!findings.length) {
     get('findings').replaceChildren(emptyState('no-findings', '暂未发现值得优先处理的问题。', '只读审查不修改文件；需要深入时可以针对具体文件继续讨论。'));
     return;
@@ -324,17 +346,28 @@ const renderFindings = (findings, disabled) => {
     const card = document.createElement('article'); card.className = 'hf-card hf-finding-card';
     const header = document.createElement('header'); header.className = 'hf-card__header';
     const id = document.createElement('span'); id.className = 'hf-finding-card__id'; id.textContent = `F-${String(index + 1).padStart(3, '0')}`;
+    const choose = document.createElement('input'); choose.type = 'checkbox'; choose.checked = selectedFindingIds.has(item.id);
+    choose.disabled = disabled || protocolMismatch; choose.setAttribute('aria-label', `选择问题：${item.title}`);
+    choose.onchange = () => {
+      if (choose.checked && selectedFindingIds.size >= 50) { choose.checked = false; get('finding-selection-count').textContent = '一次最多选择 50 个问题'; return; }
+      if (choose.checked) selectedFindingIds.add(item.id); else selectedFindingIds.delete(item.id);
+      updateFindingSelection();
+    };
     const status = document.createElement('select'); status.className = 'finding-status';
     status.setAttribute('aria-label', `${item.title} 的处理状态`);
     for (const [value, label] of findingStatuses) { const option = document.createElement('option'); option.value = value; option.textContent = label; status.append(option); }
     status.value = item.status; status.disabled = disabled;
     status.onchange = () => vscode.postMessage({ type: 'findingStatus', id: item.id, status: status.value });
-    header.append(id, status);
+    const selectionLabel = document.createElement('label'); selectionLabel.className = 'hf-check'; selectionLabel.append(choose, id);
+    header.append(selectionLabel, status);
     const body = document.createElement('div'); body.className = 'hf-card__body';
     const location = document.createElement('button'); location.type = 'button';
-    location.className = 'file-link hf-finding-card__location'; location.textContent = `${item.path}:${item.line}`;
-    location.title = '在编辑器中打开该位置';
-    location.onclick = () => vscode.postMessage({ type: 'openFile', path: `${item.path}:${item.line}` });
+    const simplification = item.category === 'simplification';
+    body.append(chip(simplification ? '简化建议 · 可选' : '缺陷', 'review'));
+    location.className = 'file-link hf-finding-card__location'; location.textContent = item.locationStatus === 'stale' ? `${item.path} · 位置待确认（原 ${item.line} 行）` : `${item.path}:${item.line}`;
+    location.title = item.locationStatus === 'stale' ? '打开文件；原问题位置需要重新审查确认' : '核对当前代码后定位问题';
+    location.disabled = protocolMismatch;
+    location.onclick = () => { if (!protocolMismatch) vscode.postMessage(item.locationStatus === 'stale' ? { type: 'openFile', taskId: historyTaskId, path: item.path } : { type: 'openFinding', taskId: historyTaskId, id: item.id }); };
     const summary = document.createElement('p'); summary.className = 'hf-finding-card__summary'; summary.textContent = item.title;
     const evidence = document.createElement('div'); evidence.className = 'hf-finding-card__evidence';
     const evidenceLabel = document.createElement('strong'); evidenceLabel.textContent = '依据';
@@ -343,12 +376,13 @@ const renderFindings = (findings, disabled) => {
     const facts = document.createElement('dl'); facts.className = 'hf-finding-card__facts';
     const fact = (term, value) => { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = term; dd.textContent = value; facts.append(dt, dd); };
     fact('影响', item.impact);
+    if (item.replacement) fact('替代方案', item.replacement);
     fact('状态', (findingStatuses.find(entry => entry[0] === item.status) ?? [item.status, item.status])[1]);
     body.append(location, summary, evidence, facts);
     const footer = document.createElement('footer'); footer.className = 'hf-card__footer';
     const discuss = actionButton('讨论此问题', 'secondary');
-    discuss.onclick = () => workspace.quote({ id: item.id, text: JSON.stringify({ path: item.path, line: item.line, title: item.title, evidence: item.evidence, impact: item.impact }, null, 2) }, '针对以下问题继续讨论', 'discuss');
-    const fix = actionButton('仅处理此问题', undefined);
+    discuss.disabled = disabled || protocolMismatch; discuss.onclick = () => { if (!protocolMismatch) workspace.discussFindings([item.id]); };
+    const fix = actionButton(simplification ? '提出简化候选' : '仅处理此问题', undefined);
     fix.disabled = disabled; fix.onclick = () => vscode.postMessage({ type: 'fixFinding', id: item.id });
     footer.append(discuss, fix);
     card.append(header, body, footer); return card;
@@ -504,10 +538,29 @@ get('new-task').onclick = () => vscode.postMessage({ type: 'newTask' });
 get('restore-task').onclick = () => vscode.postMessage({ type: 'restoreTask' });
 get('delete-task').onclick = () => vscode.postMessage({ type: 'deleteTask' });
 get('cancel').onclick = () => vscode.postMessage({ type: 'cancel' });
+get('composer-settings').onclick = () => {
+  get('settings-panel').open = true;
+  get('settings-panel').scrollIntoView({ block: 'start' });
+  get('settings-panel').querySelector('summary').focus({ preventScroll: true });
+};
+document.addEventListener('click', event => {
+  if (!event.target.closest('#task-menu') || event.target.closest('#restore-task, #delete-task')) get('task-menu').open = false;
+});
+get('task-menu').addEventListener('keydown', event => {
+  if (event.key === 'Escape') { get('task-menu').open = false; get('task-menu').querySelector('summary').focus(); }
+});
+get('question').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+    event.preventDefault(); get('form').requestSubmit();
+  }
+});
 get('form').onsubmit = event => {
   event.preventDefault();
   const question = get('question').value.trim();
-  if (question && !get('send').disabled) { vscode.postMessage({ type: 'ask', taskId: historyTaskId, question, intent: get('intent').value }); workspace.submitted(); }
+  if (protocolMismatch && workspace.selectedFindings().length) {
+    get('status').textContent = '问题引用需要重新加载窗口后发送；草稿和引用已保留。'; return;
+  }
+  if (question && !get('send').disabled) { vscode.postMessage({ type: 'ask', taskId: historyTaskId, question, intent: get('intent').value, findingIds: workspace.selectedFindings() }); workspace.submitted(); }
 };
 window.addEventListener('message', ({ data: message }) => {
   let data = message;
@@ -527,7 +580,7 @@ window.addEventListener('message', ({ data: message }) => {
   if (data.protocol !== undefined) hostProtocol = data.protocol;
   protocolMismatch = hostProtocol !== PANEL_PROTOCOL;
   protocolWarning.hidden = !protocolMismatch;
-  if (protocolMismatch) protocolWarning.textContent = '扩展宿主仍是旧版本（通常是安装新版本后没有重新加载窗口）：单页改动等新功能可能不生效，请执行“开发人员：重新加载窗口”。';
+  if (protocolMismatch) protocolWarning.textContent = '面板与扩展宿主版本不兼容：问题定位、问题引用和单页改动暂不可用。请执行“开发人员：重新加载窗口”；草稿和引用会保留。';
   const taskChanged = data.taskId !== historyTaskId;
   if (taskChanged) { historyWindow = 20; filesSignature = undefined; fileIndex = 0; }
   roundStates = data.turns ?? [];

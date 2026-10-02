@@ -17,7 +17,7 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
   const disposable = () => ({ dispose() {} });
   const uri = path => ({ scheme: 'file', fsPath: path, toString: () => path });
   const emit = doc => { for (const listener of changes) listener({ document: doc, contentChanges: [{}] }); };
-  let panel, saveFails = false, taskEnded;
+  let panel, saveFails = false, taskEnded, opened;
   const vscode = {
     Uri: { file: uri, joinPath: (base, path) => uri(join(base.fsPath, path)) },
     Range: class { constructor(...args) { this.args = args; } },
@@ -39,6 +39,7 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
         if (!docs.has(path)) {
           const document = { uri: value, text: await readFile(path, 'utf8'), isDirty: false, isClosed: false,
             getText() { return this.text; }, positionAt: offset => offset, offsetAt: offset => offset,
+            get lineCount() { return this.text.split('\n').length; },
             async save() { if (saveFails) return false; await writeFile(path, this.text); this.isDirty = false; return true; } };
           docs.set(path, document);
         }
@@ -53,6 +54,7 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
       async showQuickPick(items) { return items[0]; },
       async showWarningMessage(text) { return text.startsWith('运行验证命令') ? '运行' : '删除记录'; },
       async showInputBox() { return 'humanflow-secret-test'; },
+      async showTextDocument(document, options) { opened = { document, options }; },
       createWebviewPanel() {
         let closed;
         panel = { webview: { postMessage() {}, asWebviewUri: uri => uri, onDidReceiveMessage: disposable },
@@ -94,6 +96,7 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
     assert.equal(await readFile(join(root, 'a.js'), 'utf8'), 'const a = 1;\nconst c = 1;\n');
     assert.match(api.snapshot().status, /保存失败/);
     assert.deepEqual(api.snapshot().task.outcomes[0].saveFailed, ['a.js']);
+    assert.equal(api.snapshot().task.findings[0].locationStatus, 'stale', '应用候选同样应使被改写的问题位置待确认');
     saveFails = false;
     doc.text = 'const a = 9;\nconst c = 1;\n'; emit(doc);
     vscode.window.activeTextEditor = { document: doc, selection: { isEmpty: true } };
@@ -128,6 +131,13 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
     assert.equal(api.snapshot().history.length, 0);
     await api.dispatch({ type: 'restoreTask' });
     assert.equal(api.snapshot().task.id, id);
+    // 仅切换任务、未编辑内容也必须保存活动任务，并在重启后恢复。
+    await api.flush();
+    assert.equal(storage.get('humanflow.activeTask'), id);
+    for (const subscription of ctx.subscriptions) subscription.dispose();
+    ctx = context(); api = await extension.activate(ctx);
+    assert.equal(api.snapshot().task.id, id);
+    await commands.get('humanflow.open')();
     await commands.get('humanflow.setDeepSeekApiKey')();
     await api.dispatch({ type: 'provider', provider: 'deepseek' });
     assert.equal(api.snapshot().task.provider, 'deepseek');
@@ -169,6 +179,27 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
     assert.equal(api.snapshot().suggestion, null);
     assert.match(api.snapshot().status, /已拒绝候选/);
     assert.equal(api.snapshot().task.session, null);
+    await api.dispatch({ type: 'ask', question: 'multi-audit' });
+    const multi = api.snapshot().task.findings.filter(item => item.title.startsWith('多问题'));
+    assert.equal(multi.length, 2);
+    assert.equal(multi[1].category, 'simplification');
+    assert.match(multi[1].replacement, /复用已有函数/);
+    assert.equal(multi[0].locationStatus, 'current');
+    await api.dispatch({ type: 'findingStatus', id: multi[0].id, status: 'deferred' });
+    doc.text = '// shift finding\n' + doc.text; emit(doc);
+    assert.equal(api.snapshot().task.findings.find(item => item.id === multi[0].id).line, 3);
+    await api.dispatch({ type: 'openFinding', id: multi[0].id });
+    assert.equal(opened.document, doc);
+    assert.deepEqual(opened.options.selection.args, [2, 0, 2, 0]);
+    await api.dispatch({ type: 'ask', question: 'multi-discuss', findingIds: multi.map(item => item.id) });
+    assert.ok(api.snapshot().suggestion, api.snapshot().status);
+    assert.equal(api.snapshot().task.findings.find(item => item.id === multi[0].id).status, 'deferred');
+    const lastTurn = api.snapshot().task.turns.at(-1).id;
+    assert.match(api.snapshot().task.history.find(item => item.turnId === lastTurn && item.role === '你').text, /多问题 A.*多问题 B/);
+    doc.text = '// changed beyond recognition\n'; emit(doc);
+    assert.equal(api.snapshot().task.findings.find(item => item.id === multi[0].id).locationStatus, 'stale');
+    await api.dispatch({ type: 'openFinding', id: multi[0].id });
+    assert.match(api.snapshot().status, /无法唯一定位/);
     await api.dispatch({ type: 'deleteTask' }); await api.flush();
     assert.ok(!storage.get('humanflow.tasks.v1').some(task => task.id === id));
   } finally {

@@ -115,16 +115,27 @@ export function candidateChangePage(relativePath, before, edits, { comment = { o
     const start = source.indexOf(chunk);
     // 定位不到或原文不唯一时跳过，不猜测位置。
     if (start < 0 || source.indexOf(chunk, start + 1) !== -1) { unresolved++; continue; }
-    const removedLines = toLines(chunk), addedLines = toLines(edit.after);
+    const after = toText(edit.after);
     // 前后一致的片段不是改动，避免在页面上显示成"删除 + 新增"。
-    if (removedLines.join('\n') === addedLines.join('\n')) continue;
-    located.push({
-      startLine: (source.slice(0, start).match(/\n/g) ?? []).length,
-      removed: removedLines,
-      added: addedLines,
-    });
+    if (chunk === after) continue;
+    const end = start + chunk.length;
+    const lineStart = start === 0 ? 0 : source.lastIndexOf('\n', start - 1) + 1;
+    // 若替换吞掉了行尾换行，下一行也属于改动后的同一行。
+    const keepsBoundary = source[end - 1] === '\n' && after.endsWith('\n');
+    const nextNewline = source.indexOf('\n', end);
+    const lineEnd = keepsBoundary ? end : nextNewline < 0 ? source.length : nextNewline + 1;
+    located.push({ start, end, after, lineStart, lineEnd });
   }
-  located.sort((a, b) => a.startLine - b.startLine);
+  located.sort((a, b) => a.start - b.start);
+  // 同一行内的独立片段合并渲染，保留片段外的前缀、后缀和中间代码。
+  const groups = [];
+  for (const item of located) {
+    const previous = groups.at(-1);
+    if (previous && item.lineStart < previous.end) {
+      previous.end = Math.max(previous.end, item.lineEnd);
+      previous.edits.push(item);
+    } else groups.push({ start: item.lineStart, end: item.lineEnd, edits: [item] });
+  }
   const output = [decorate(`HumanFlow 候选改动：${relativePath}`), decorate('只读快照：整份候选代码，- 删除行 / + 新增行，尚未应用')];
   const removed = [], added = [];
   const push = (kind, value) => {
@@ -137,11 +148,18 @@ export function candidateChangePage(relativePath, before, edits, { comment = { o
   const createPage = !lines.length && edits.length === 1 && toText(edits[0]?.before) === '';
   if (createPage) for (const line of toLines(edits[0].after)) push('add', line);
   let cursor = 0;
-  for (const item of located) {
-    for (let index = cursor; index < item.startLine; index++) push('same', lines[index]);
-    for (const line of item.removed) push('remove', line);
-    for (const line of item.added) push('add', line);
-    cursor = item.startLine + item.removed.length;
+  for (const group of groups) {
+    const startLine = (source.slice(0, group.start).match(/\n/g) ?? []).length;
+    const original = source.slice(group.start, group.end);
+    let changed = original;
+    for (const item of [...group.edits].reverse()) {
+      changed = changed.slice(0, item.start - group.start) + item.after + changed.slice(item.end - group.start);
+    }
+    for (let index = cursor; index < startLine; index++) push('same', lines[index]);
+    const removedLines = toLines(original);
+    for (const line of removedLines) push('remove', line);
+    for (const line of toLines(changed)) push('add', line);
+    cursor = startLine + removedLines.length;
   }
   for (let index = cursor; index < lines.length; index++) push('same', lines[index]);
   const skipped = unresolved + Math.max(0, emptyChunks - (createPage ? 1 : 0));

@@ -91,6 +91,32 @@ test('单页改动输出整份文件与删除/新增行号', () => {
   assert.deepEqual(mixed.added, [4, 6]);
 });
 
+test('单页改动保留半行上下文，同一行多片段合并，跨行与换行替换保持实际结果', () => {
+  const cases = [
+    { before: 'const answer = oldValue + 1;\n', edits: [{ before: 'oldValue', after: 'newValue' }],
+      rendered: ['const answer = oldValue + 1;', 'const answer = newValue + 1;'] },
+    { before: 'const answer = left + right;\n', edits: [{ before: 'right', after: 'second' }, { before: 'left', after: 'first' }],
+      rendered: ['const answer = left + right;', 'const answer = first + second;'] },
+    { before: 'prefix OLD\nBODY suffix\ntail\n', edits: [{ before: 'OLD\nBODY', after: 'NEW' }] },
+    { before: 'one\ntwo\nthree\n', edits: [{ before: 'one\n', after: 'joined ' }] },
+    { before: 'one\ntwo', edits: [{ before: '\n', after: '' }] },
+    { before: 'one\ntwo\nthree\n', edits: [{ before: 'one\n', after: '' }] },
+    { before: 'const 中文 = old;\r\nnext();\r\n', edits: [{ before: 'old', after: 'new' }] },
+    { before: 'prefix old suffix', edits: [{ before: 'old', after: 'new\nline' }] },
+    { before: '\nlast', edits: [{ before: '\n', after: 'first\n' }] },
+    { before: 'last', edits: [{ before: 'last', after: '' }] },
+  ];
+  for (const { before, edits, rendered } of cases) {
+    const page = candidateChangePage('a.js', before, edits);
+    const output = page.text.split('\n').slice(0, -1);
+    if (rendered) assert.deepEqual(output.slice(2), rendered);
+    // 忽略删除行后必须得到真正的候选代码；忽略新增行后必须还原原始代码。
+    const lines = value => value === '' ? [] : value.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
+    assert.deepEqual(output.filter((_, i) => i >= 2 && !page.removed.includes(i)), lines(replaceExact(before, edits)));
+    assert.deepEqual(output.filter((_, i) => i >= 2 && !page.added.includes(i)), lines(before));
+  }
+});
+
 test('单页改动表头按目标语言写成注释，定位不唯一时跳过且可退回文本标记', () => {
   assert.deepEqual(changePageComment('src/a.py'), { open: '#', close: '' });
   assert.deepEqual(changePageComment('src/a.js'), { open: '//', close: '' });

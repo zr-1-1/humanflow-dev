@@ -19,12 +19,22 @@ function createWorkspace(api) {
   const containers = {};
   for (const [name, nodes] of Object.entries(groups)) {
     const section = document.createElement('section'); section.id = `view-${name}`;
+    section.setAttribute('role', 'tabpanel'); section.setAttribute('aria-labelledby', `tab-${name}`);
+    el(`tab-${name}`).setAttribute('aria-controls', section.id);
     main.insertBefore(section, nodes[0]); section.append(...nodes); containers[name] = section;
     el(`tab-${name}`).onclick = () => selectView(name);
+    el(`tab-${name}`).onkeydown = event => {
+      const names = Object.keys(groups), index = names.indexOf(name);
+      const target = event.key === 'Home' ? names[0] : event.key === 'End' ? names.at(-1)
+        : event.key === 'ArrowRight' ? names[(index + 1) % names.length]
+          : event.key === 'ArrowLeft' ? names[(index + names.length - 1) % names.length] : null;
+      if (!target) return;
+      event.preventDefault(); selectView(target); el(`tab-${target}`).focus();
+    };
   }
   function selectView(name) {
     ui.scroll ??= {}; ui.scroll[view] = main.scrollTop; view = name; ui.view = name;
-    for (const key of Object.keys(groups)) { containers[key].hidden = key !== name; el(`tab-${key}`).setAttribute('aria-selected', String(key === name)); }
+    for (const key of Object.keys(groups)) { containers[key].hidden = key !== name; el(`tab-${key}`).setAttribute('aria-selected', String(key === name)); el(`tab-${key}`).tabIndex = key === name ? 0 : -1; }
     main.scrollTop = ui.scroll[name] ?? 0; persist();
   }
   const search = document.createElement('input'); search.type = 'search'; search.id = 'history-search'; search.placeholder = '搜索全部请求、回复和候选'; search.setAttribute('aria-label', '搜索全部历史');
@@ -92,6 +102,20 @@ function createWorkspace(api) {
     el('question').value = `${prefix}（引用轮次 ${entry.turnId ?? '旧记录'} / 消息 ${entry.id ?? ''}）：\n${entry.text.slice(0, 8000)}\n\n`;
     el('intent').value = intent; saveDraft(); el('question').focus();
   }
+  const selectedFindings = () => (ui.findingIds ?? []).filter(id => (data.findings ?? []).some(item => item.id === id));
+  function renderFindingAttachments() {
+    const selected = selectedFindings().map(id => data.findings.find(item => item.id === id));
+    el('finding-attachments').hidden = !selected.length;
+    el('finding-attachment-label').textContent = `引用 ${selected.length} 个问题：${selected.map(item => item.title).join('；')}`;
+  }
+  function discussFindings(ids) {
+    const combined = [...new Set([...selectedFindings(), ...ids])];
+    if (combined.length > 50) { el('status').textContent = '一次最多讨论 50 个问题，请先移除部分引用。'; return; }
+    ui.findingIds = combined;
+    if (!el('question').value.trim()) el('question').value = '请一起分析这些问题的原因、关联和处理顺序。';
+    el('intent').value = 'discuss'; saveDraft(); renderFindingAttachments(); selectView('discuss'); el('question').focus();
+  }
+  el('remove-finding-attachments').onclick = () => { ui.findingIds = []; persist(); renderFindingAttachments(); };
   function entryActions(entry, article) {
     const actions = document.createElement('div'); actions.className = 'entry-actions';
     for (const [label, prefix, intent] of [['引用追问', '针对以下内容继续讨论', 'discuss'], ['解释 API', '仅解释以下内容中的 API', 'explain'], ['为什么这样改', '仅解释以下建议的依据与影响', 'explain']]) {
@@ -117,6 +141,7 @@ function createWorkspace(api) {
   }
   const setUnlessEditing = (id, value) => { if (document.activeElement !== el(id)) el(id).value = value; };
   function render(changedTask) {
+    renderFindingAttachments();
     if (changedTask || !el('task-plan').open) {
       setUnlessEditing('goal', data.goal ?? ''); setUnlessEditing('budget-paths', (data.budget?.paths ?? []).join('\n'));
       el('budget-enabled').checked = data.budget?.enabled === true;
@@ -159,12 +184,12 @@ function createWorkspace(api) {
     const previous = el('feedback-record').value;
     el('feedback-record').replaceChildren(...(data.validations ?? []).map(record => { const option = document.createElement('option'); option.value = record.id; option.textContent = record.command; return option; }));
     if (previous) el('feedback-record').value = previous;
-    for (const key of Object.keys(groups)) { containers[key].hidden = key !== view; el(`tab-${key}`).setAttribute('aria-selected', String(key === view)); }
+    for (const key of Object.keys(groups)) { containers[key].hidden = key !== view; el(`tab-${key}`).setAttribute('aria-selected', String(key === view)); el(`tab-${key}`).tabIndex = key === view ? 0 : -1; }
     if (changedTask) {
       main.scrollTop = ui.scroll?.[view] ?? 0;
       const anchor = ui.anchor && el(ui.anchor.id);
       if (anchor && view === 'discuss') main.scrollTop += anchor.getBoundingClientRect().top - main.getBoundingClientRect().top - ui.anchor.offset;
     }
   }
-  return { merge, render, entryActions, jump, quote, labels, getOpen: id => ui.open?.[id], submitted() { clearTimeout(draftTimer); ui.draft = ''; el('question').value = ''; persist(); }, selectView };
+  return { merge, render, entryActions, jump, quote, labels, selectedFindings, discussFindings, getOpen: id => ui.open?.[id], submitted() { clearTimeout(draftTimer); ui.draft = ''; ui.findingIds = []; el('question').value = ''; renderFindingAttachments(); persist(); }, selectView };
 }

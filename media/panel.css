@@ -57,12 +57,19 @@ pre { margin: var(--hf-space-2) 0; padding: var(--hf-space-2) var(--hf-space-3);
 .task-header__identity { display: flex; align-items: center; gap: var(--hf-space-2); flex: 1; min-width: 0; }
 .task-header h2 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-header .actions { margin: 0; }
+.task-header { flex-shrink: 0; position: relative; z-index: 4; }
+.task-menu { position: relative; font-size: var(--hf-text-sm); }
+.task-menu > summary { padding: 5px 8px; border-radius: var(--hf-radius-sm); color: var(--hf-fg-muted); }
+.task-menu > summary:hover { background: var(--hf-hover); }
+.task-menu__items { position: absolute; right: 0; top: 100%; min-width: 160px; display: grid; gap: var(--hf-space-1); padding: var(--hf-space-2); border: 1px solid var(--hf-border); border-radius: var(--hf-radius-md); background: var(--hf-bg); box-shadow: 0 4px 12px var(--vscode-widget-shadow, transparent); }
+.task-menu__items button { justify-content: flex-start; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .workspace { display: flex; flex: 1; min-height: 0; }
 /* 固定预留滚动条占位，避免出现滚动条后目录输入框仍按旧宽度排版而横向溢出。 */
 .outline-panel { width: 232px; flex-shrink: 0; border-right: 1px solid var(--hf-border); padding: var(--hf-space-3); overflow: auto; scrollbar-gutter: stable; }
-.outline-panel:not([open]) { width: 110px; }
-.outline-panel > summary { display: flex; align-items: center; gap: var(--hf-space-2); }
+.outline-panel:not([open]) { width: 184px; }
+.outline-panel > summary { display: flex; align-items: center; gap: var(--hf-space-2); white-space: nowrap; }
 #history-search { width: 100%; margin-top: var(--hf-space-2); }
 #outline { display: grid; gap: 2px; margin-top: var(--hf-space-2); }
 .outline-link { text-align: left; color: var(--hf-fg); border-left: 2px solid transparent; border-radius: 0 var(--hf-radius-sm) var(--hf-radius-sm) 0; font-size: var(--hf-text-sm); overflow-wrap: anywhere; }
@@ -77,6 +84,10 @@ summary { cursor: pointer; padding: var(--hf-space-2) 0; overflow-wrap: anywhere
 .panel-block { border-bottom: 1px solid var(--hf-border); }
 .panel-block > summary { display: flex; align-items: center; gap: var(--hf-space-2); font-weight: var(--hf-weight-medium); }
 .panel-block > summary .hf-meta { color: var(--hf-fg-muted); font-weight: var(--hf-weight-normal); }
+.panel-block > summary::before, .outline-panel > summary::before, #files details > summary::before { content: '›'; display: inline-block; flex: none; width: 10px; text-align: center; color: var(--hf-fg-muted); }
+.panel-block[open] > summary::before, .outline-panel[open] > summary::before, #files details[open] > summary::before { transform: rotate(90deg); }
+.panel-block > summary:hover { background: var(--hf-hover); }
+.panel-block { scroll-margin-top: 48px; }
 .panel-block > *:not(summary) { padding-left: var(--hf-space-3); }
 
 .view-tabs { position: sticky; top: calc(-1 * var(--hf-space-3)); z-index: 2; display: flex; gap: var(--hf-space-1); padding: var(--hf-space-1) 0 var(--hf-space-2); background: var(--hf-bg); flex-wrap: wrap; }
@@ -91,7 +102,7 @@ summary { cursor: pointer; padding: var(--hf-space-2) 0; overflow-wrap: anywhere
 /* ── 讨论记录 ─────────────────────────────────────────────────────── */
 .history-toolbar { display: flex; align-items: center; gap: var(--hf-space-2); flex-wrap: wrap; margin-top: var(--hf-space-4); }
 .history-toolbar > span { margin-right: auto; color: var(--hf-fg-muted); font-size: var(--hf-text-meta); text-transform: uppercase; letter-spacing: .055em; }
-.request-round { border-bottom: 1px solid var(--hf-border); scroll-margin-top: var(--hf-space-3); }
+.request-round { border-bottom: 1px solid var(--hf-border); scroll-margin-top: 48px; }
 .request-round > summary { font-weight: var(--hf-weight-medium); line-height: 1.5; }
 .history-entry { margin: var(--hf-space-2) 0; padding: var(--hf-space-2) var(--hf-space-3); border-left: 2px solid var(--hf-border); border-radius: 0 var(--hf-radius-sm) var(--hf-radius-sm) 0; background: var(--hf-surface-subtle); }
 .history-entry p { margin: var(--hf-space-1) 0; }
@@ -116,6 +127,9 @@ summary { cursor: pointer; padding: var(--hf-space-2) 0; overflow-wrap: anywhere
 #batch-records details { border: 1px solid var(--hf-border); border-radius: var(--hf-radius-sm); padding: 0 var(--hf-space-2); }
 #batch-records details > summary { font-size: var(--hf-text-sm); }
 .finding-status { font-size: var(--hf-text-meta); }
+.finding-toolbar { padding-block: var(--hf-space-2); }
+.finding-attachments { display: flex; flex-wrap: wrap; align-items: center; gap: var(--hf-space-2); padding: var(--hf-space-2); border-left: 2px solid var(--hf-focus); background: var(--hf-surface-raised); font-size: var(--hf-text-sm); }
+#finding-attachment-label { flex: 1; min-width: 0; overflow-wrap: anywhere; max-height: 64px; overflow: auto; }
 .hf-finding-card__location { display: block; margin: 0 0 var(--hf-space-1); padding: 0; }
 .hf-finding-card__facts { grid-template-columns: auto 1fr; }
 #budget-errors { color: var(--hf-error); }
@@ -152,6 +166,13 @@ summary { cursor: pointer; padding: var(--hf-space-2) 0; overflow-wrap: anywhere
 .composer textarea { max-height: 24vh; min-height: 54px; margin: 0; }
 .composer-row { display: flex; align-items: center; gap: var(--hf-space-2); flex-wrap: wrap; }
 .composer .actions { margin-bottom: 0; }
+.composer form { display: grid; gap: var(--hf-space-2); }
+.composer textarea { padding: var(--hf-space-2) var(--hf-space-3); line-height: 1.5; border-radius: var(--hf-radius-md); }
+.composer-row .actions { margin-left: auto; flex-wrap: nowrap; }
+.composer-row select { min-width: 0; }
+.composer-help { display: flex; justify-content: space-between; gap: var(--hf-space-2); flex-wrap: wrap; color: var(--hf-fg-muted); font-size: var(--hf-text-meta); }
+.composer-heading button { font-size: var(--hf-text-sm); }
+.review-guidance { padding: var(--hf-space-2) 0; }
 .save-hint { font-size: var(--hf-text-sm); }
 .save-hint > summary { color: var(--hf-fg-muted); font-size: var(--hf-text-meta); padding: var(--hf-space-1) 0; }
 
@@ -160,9 +181,20 @@ summary { cursor: pointer; padding: var(--hf-space-2) 0; overflow-wrap: anywhere
   .outline-panel, .outline-panel:not([open]) { width: auto; padding: var(--hf-space-1) var(--hf-space-3); border-right: 0; border-bottom: 1px solid var(--hf-border); max-height: 30%; }
   #conversation { padding: var(--hf-space-2) var(--hf-space-3) var(--hf-space-4); }
   .task-header, .composer { padding: var(--hf-space-2) var(--hf-space-3); }
-  .task-header__identity { flex: 1 1 100%; }
+  .task-header__identity { flex: 1 1 auto; }
   .task-header h2 { font-size: var(--hf-text-emphasis); }
   .panel-block > *:not(summary) { padding-left: var(--hf-space-2); }
+}
+
+@media (max-width: 420px) {
+  .task-header { gap: var(--hf-space-1); }
+  .task-header__identity { flex-basis: 100%; }
+  .task-header .actions { gap: var(--hf-space-1); }
+  .composer-row { gap: var(--hf-space-1); }
+  .composer-row .hf-check { font-size: var(--hf-text-meta); }
+  .composer-row button { padding-inline: 8px; }
+  .view-tabs { gap: 0; }
+  .view-tabs button { padding-inline: 8px; }
 }
 
 /* 窄面板下审查栏改为两行：先导航与勾选数，再放操作按钮，避免按钮压住候选信息。 */

@@ -33,6 +33,12 @@ createInterface({ input: process.stdin }).on('line', line => {
       }
     }
     const files = ['a.js', 'b.js'];
+    if (input.request.startsWith('multi-discuss')) {
+      const selected = JSON.parse(input.request.split('\n').at(-1));
+      if (selected.length !== 2 || selected[0].line !== 3 || selected.some(item => item.anchor)) {
+        send({ method: 'turn/completed', params: { threadId: 'test-thread', turn: { id, status: 'failed', error: { message: '多问题讨论未携带最新位置或包含内部锚点' } } } }); return;
+      }
+    }
     const changes = ['followup', 'audit', 'review'].includes(input.request) ? [] : input.request === 'create' ? [{ path: 'new.js', operation: 'create', reason: '新增测试文件', edits: [{ before: '', after: 'export const created = true;\n' }] }] : files.map(path => {
       const buffer = input.editorBuffers.find(item => item.path.endsWith(path));
       const text = buffer?.text ?? readFileSync(join(process.cwd(), path), 'utf8');
@@ -41,6 +47,11 @@ createInterface({ input: process.stdin }).on('line', line => {
     const suggestion = { summary: '离线候选', changes, explanation: '**说明**\n[文件](a.js:1)', verification: '协议替身，未调用真实模型',
       findings: [{ path: 'a.js', line: 1, title: '测试问题', evidence: 'const a 定义', impact: '测试影响' }],
       checks: [{ command: 'echo HumanFlow-test', reason: '离线验证示例' }], dependencies: ['a.js 的片段请核对后一起接受'], references: ['a.js', 'b.js'] };
+    if (input.request === 'multi-audit') {
+      suggestion.changes = [];
+      suggestion.findings = [{ path: 'a.js', line: 2, title: '多问题 A', evidence: 'line A', impact: '测试' }, { path: 'b.js', line: 1, title: '多问题 B', evidence: 'line B', impact: '测试', category: 'simplification', replacement: '复用已有函数，并验证返回值不变。' }];
+    }
+    if (input.request.startsWith('multi-discuss')) { suggestion.changes = []; suggestion.findings = []; }
     send({ method: 'item/completed', params: { threadId: 'test-thread', turnId: id, item: { id: 'answer', type: 'agentMessage', text: JSON.stringify(suggestion) } } });
     send({ method: 'turn/completed', params: { threadId: 'test-thread', turn: { id, status: 'completed' } } });
   } else reply({});

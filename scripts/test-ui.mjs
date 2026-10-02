@@ -86,7 +86,7 @@ try {
   ]).flat();
   const findings = [
     { id: 'f1', path: 'src/satlib.c', line: 12, title: '坐标转换方向可能与项目约定不一致', evidence: 'expected: ECI → VVLH\ncurrent: VVLH → ECI', impact: '影响姿态解算结果', status: 'open' },
-    { id: 'f2', path: 'test/attitude.m', line: 3, title: '边界条件缺少测试', evidence: '未覆盖空数组输入', impact: '回归风险', status: 'deferred' },
+    { id: 'f2', path: 'test/attitude.m', line: 3, title: '边界处理可以复用已有函数', evidence: '两个调用点重复处理空数组', impact: '减少维护点，保留空数组行为', status: 'deferred', category: 'simplification', replacement: '复用现有 normalizeInput，使用空数组和常规输入核对输出一致。' },
   ];
   const state = { taskId: 'a', taskTitle: '优化项目交互', provider: 'deepseek', scope: '/workspace/project', selected: '', status: '就绪',
     models: [{ model: 'deepseek-flash', label: 'DeepSeek Flash', efforts: ['low'] }], choice: { model: 'deepseek-flash', effort: 'low' }, history,
@@ -98,7 +98,14 @@ try {
   await publish();
   // 面板脚本从磁盘读取，可能比正在运行的扩展宿主新：宿主不发协议号时提示重新加载并隐藏新入口。
   assert.equal(await evaluate("document.getElementById('protocol-warning').hidden"), false);
+  assert.equal(await evaluate("document.querySelector('#findings .hf-finding-card__location').disabled"), true);
   state.protocol = 2; await publish();
+  assert.equal(await evaluate("document.getElementById('protocol-warning').hidden"), false);
+  assert.equal(await evaluate("document.querySelector('#findings input[type=checkbox]').disabled"), true);
+  const oldRequests = await evaluate('window.sent.length');
+  await evaluate("document.querySelector('#findings .hf-finding-card__location').click(); document.querySelector('#findings .hf-card__footer button').click(); document.getElementById('discuss-findings').click()");
+  assert.equal(await evaluate('window.sent.length'), oldRequests, '旧宿主不能收到不支持的问题操作');
+  state.protocol = 3; await publish();
   assert.equal(await evaluate("document.getElementById('protocol-warning').hidden"), true);
   // 设计系统接线：Token、素材与组件类必须真正生效。
   assert.equal(await evaluate("getComputedStyle(document.documentElement).getPropertyValue('--hf-text-title').trim()"), '16px');
@@ -106,6 +113,10 @@ try {
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.hf-icon--finding')).maskImage.includes('image/svg+xml')"), true);
   assert.equal(await evaluate("document.querySelectorAll('#findings .hf-finding-card').length"), 2);
   assert.equal(await evaluate("document.querySelector('#findings .hf-finding-card .hf-finding-card__location').textContent"), 'src/satlib.c:12');
+  assert.equal(await evaluate("document.querySelector('#findings .hf-card__body .hf-status-chip').textContent"), '缺陷');
+  assert.match(await evaluate("document.querySelectorAll('#findings .hf-card')[1].textContent"), /简化建议 · 可选/);
+  assert.match(await evaluate("document.querySelectorAll('#findings .hf-card')[1].textContent"), /替代方案.*normalizeInput/);
+  assert.equal(await evaluate("[...document.querySelectorAll('#findings .hf-card')[1].querySelectorAll('button')].at(-1).textContent"), '提出简化候选');
   assert.equal(await evaluate("document.querySelectorAll('#checks .hf-card').length"), 1);
   assert.equal(await evaluate("document.querySelectorAll('#decisions .hf-decision-card').length"), 1);
   assert.equal(await evaluate("document.querySelectorAll('#context-meter .hf-context-meter__row').length"), 3);
@@ -235,6 +246,75 @@ try {
   assert.equal(await evaluate('window.sent.at(-1).mode'), 'unified');
   await evaluate("document.getElementById('tab-findings').click(); document.getElementById('feedback-text').value = 'token=hidden error'; document.getElementById('preview-feedback').click(); document.getElementById('send-feedback').click()");
   assert.equal(await evaluate('window.sent.at(-1).text'), 'token=[已遮盖] error');
+  // 键盘导航、设置快捷入口与任务菜单在真实浏览器中可操作。
+  await evaluate("document.getElementById('tab-discuss').click(); document.getElementById('tab-discuss').dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}))");
+  assert.equal(await evaluate('document.activeElement.id'), 'tab-changes');
+  assert.equal(await evaluate("document.getElementById('view-changes').getAttribute('role')"), 'tabpanel');
+  assert.equal(await evaluate("document.querySelectorAll('[role=tab][tabindex=\"0\"]').length"), 1);
+  await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Home', bubbles:true}))");
+  assert.equal(await evaluate('document.activeElement.id'), 'tab-discuss');
+  await evaluate("document.getElementById('composer-settings').click()");
+  assert.equal(await evaluate("document.getElementById('settings-panel').open"), true);
+  assert.equal(await evaluate('document.activeElement.parentElement.id'), 'settings-panel');
+  await evaluate("document.querySelector('#task-menu summary').click()");
+  assert.equal(await evaluate("document.getElementById('task-menu').open"), true);
+  await evaluate("document.getElementById('task-menu').dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))");
+  assert.equal(await evaluate("document.getElementById('task-menu').open"), false);
+  const askCount = () => evaluate("window.sent.filter(message => message.type === 'ask').length");
+  const asksBefore = await askCount();
+  await evaluate("document.getElementById('question').value = '键盘发送'; document.getElementById('question').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',ctrlKey:true,isComposing:true,bubbles:true}))");
+  assert.equal(await askCount(), asksBefore, '中文输入法确认不应发送');
+  await evaluate("document.getElementById('question').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',ctrlKey:true,bubbles:true}))");
+  assert.equal(await askCount(), asksBefore + 1);
+  state.revision = 120; state.busy = true; await publish();
+  await evaluate("document.getElementById('question').value = '忙碌时保留草稿'; document.getElementById('question').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',metaKey:true,bubbles:true}))");
+  assert.equal(await askCount(), asksBefore + 1, '忙碌时快捷键不应发送');
+  assert.equal(await evaluate("document.getElementById('question').value"), '忙碌时保留草稿');
+  // 更窄窗口与浅色主题：操作区不横向溢出，输入区仍在窗口内。
+  state.busy = false; state.revision++; await publish();
+  await evaluate("document.getElementById('tab-findings').click(); document.getElementById('findings-panel').open = true; document.querySelectorAll('#findings input[type=checkbox]').forEach(box => box.click())");
+  assert.equal(await evaluate("document.getElementById('finding-selection-count').textContent"), '已勾选 2 个问题');
+  state.revision++; state.status = '刷新不丢失多选'; await publish();
+  assert.equal(await evaluate("document.querySelectorAll('#findings input:checked').length"), 2);
+  await evaluate("document.getElementById('discuss-findings').click()");
+  assert.equal(await evaluate("document.getElementById('question').value"), '忙碌时保留草稿');
+  assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), false);
+  assert.match(await evaluate("document.getElementById('finding-attachment-label').textContent"), /引用 2 个问题/);
+  // 已有问题引用遇到旧宿主时禁止发送，保留草稿，升级兼容后恢复。
+  state.protocol = 2; state.revision++; await publish();
+  const asksWithAttachments = await askCount();
+  await evaluate("document.getElementById('form').requestSubmit()");
+  assert.equal(await askCount(), asksWithAttachments);
+  assert.equal(await evaluate("document.getElementById('question').value"), '忙碌时保留草稿');
+  assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), false);
+  assert.equal(await evaluate("document.getElementById('discuss-findings').disabled"), true);
+  state.protocol = 3; state.revision++; await publish();
+  assert.equal(await evaluate("document.getElementById('discuss-findings').disabled"), false);
+  state.taskId = 'attachment-other'; state.revision++; await publish();
+  assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), true);
+  state.taskId = 'a'; state.revision++; await publish();
+  assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), false);
+  state.findings[0].line = 19; state.findings[0].locationStatus = 'current';
+  state.findings[1].locationStatus = 'stale'; state.revision++; await publish();
+  assert.equal(await evaluate("document.querySelector('#findings .hf-finding-card__location').textContent"), 'src/satlib.c:19');
+  await evaluate("document.querySelector('#findings .hf-finding-card__location').click()");
+  assert.equal(await evaluate('window.sent.at(-1).type'), 'openFinding');
+  assert.equal(await evaluate('window.sent.at(-1).id'), 'f1');
+  await evaluate("document.querySelectorAll('#findings .hf-finding-card__location')[1].click()");
+  assert.equal(await evaluate('window.sent.at(-1).path'), 'test/attitude.m');
+  await evaluate("document.getElementById('tab-findings').click(); document.getElementById('findings-panel').open = true; document.getElementById('findings-panel').scrollIntoView({block:'start'})");
+  await writeFile(join(directory, 'multi-findings.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+  await evaluate("document.getElementById('form').requestSubmit()");
+  assert.deepEqual(await evaluate('window.sent.filter(message => message.type === "ask").at(-1).findingIds'), ['f1', 'f2']);
+  assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), true);
+  await evaluate("document.querySelector('#findings input[type=checkbox]').click(); document.getElementById('discuss-findings').click(); document.getElementById('remove-finding-attachments').click()");
+  assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), true);
+  await evaluate("document.getElementById('settings-panel').open = false; document.getElementById('tab-discuss').click(); document.getElementById('conversation').scrollTop = 0");
+  await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 640, deviceScaleFactor: 1, mobile: false });
+  await evaluate(`Object.entries({'--vscode-foreground':'#242424','--vscode-editor-background':'#ffffff','--vscode-sideBar-background':'#f5f5f5','--vscode-editorWidget-background':'#f3f3f3','--vscode-panel-border':'#d4d4d4','--vscode-input-background':'#ffffff','--vscode-input-foreground':'#242424','--vscode-input-border':'#cecece','--vscode-descriptionForeground':'#606060'}).forEach(([key,value]) => document.documentElement.style.setProperty(key,value))`);
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
+  assert.equal(await evaluate("document.querySelector('.composer').scrollWidth <= document.querySelector('.composer').clientWidth"), true);
+  await writeFile(join(directory, 'narrow-light.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
   console.log(JSON.stringify({ rounds: 100, statusUpdates: 20, elapsedMs: Math.round(updateMs), screenshotDirectory: directory }));
   console.log('PASS: design system, tokens, icons, empty states, status chips, review bar, selection sync, grouping, navigation, folding, reading position, nested state, task switching, safe text, wide/narrow layout');
   console.log(directory);
