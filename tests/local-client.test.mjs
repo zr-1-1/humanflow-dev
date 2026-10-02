@@ -20,7 +20,7 @@ test('可执行文件直接运行，codex.js 用 node 运行', () => {
 });
 
 test('候选顺序：npm 全局安装优先，桌面端可执行文件兜底', () => {
-  const npmJs = 'C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js';
+  const npmJs = join('C:\\Users\\me\\AppData\\Roaming', 'npm/node_modules/@openai/codex/bin/codex.js');
   const desktop = 'C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin\\hash\\codex.exe';
   const base = { APPDATA: 'C:\\Users\\me\\AppData\\Roaming', PATH: 'C:\\Windows' };
   const candidates = codexLaunchCandidates({ env: base, platform: 'win32', exists: path => path === npmJs || path === desktop, desktop: () => [desktop] });
@@ -32,7 +32,7 @@ test('候选顺序：npm 全局安装优先，桌面端可执行文件兜底', (
 });
 
 test('桌面端可执行文件按修改时间取最新，非 Windows 或没有目录时为空', () => {
-  const base = 'C:\\Users\\me\\AppData\\Local\\OpenAI\\Codex\\bin';
+  const base = join('C:\\Users\\me\\AppData\\Local', 'OpenAI', 'Codex', 'bin');
   const entries = [{ name: 'older', isDirectory: () => true }, { name: 'newer', isDirectory: () => true }, { name: 'note.txt', isDirectory: () => false }];
   const times = { [join(base, 'older', 'codex.exe')]: 1, [join(base, 'newer', 'codex.exe')]: 2 };
   const paths = desktopCodexPaths({
