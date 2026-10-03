@@ -46,8 +46,9 @@ test('设计系统占位符与本地素材路径可解析', () => {
 test('面板交互入口都绑定了对应消息', () => {
   const html = read('media/panel.html'), script = read('media/panel.js') + read('media/workspace.js');
   const expected = {
-    bind: 'bind', 'new-task': 'newTask', 'restore-task': 'restoreTask', 'delete-task': 'deleteTask',
+    bind: 'bind', 'select-focus-file': 'selectFocusFile', 'new-task': 'newTask', 'restore-task': 'restoreTask', 'delete-task': 'deleteTask',
     models: 'models', 'search-key': 'setSearchKey', 'deepseek-key': 'setDeepSeekKey', review: 'review', apply: 'apply',
+    'open-settings': 'openSettings', 'open-user-settings': 'openUserSettings', 'open-workspace-settings': 'openWorkspaceSettings',
     'save-plan': 'taskSettings', 'add-decision': 'decision', 'compact-thread': 'compact', 'reset-thread': 'resetThread',
     'send-feedback': 'feedback', 'open-focus': 'openFile',
     'web-enabled': 'webEnabled', 'web-provider': 'webSearchProvider', provider: 'provider', model: 'modelChoice', effort: 'modelChoice',

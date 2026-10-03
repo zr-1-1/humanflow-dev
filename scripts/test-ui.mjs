@@ -4,6 +4,8 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
+import { normalizeFindings, transitionFindings, linkFindingEvidence } from '../src/vscode/finding-state.mjs';
+if (typeof WebSocket !== 'function') throw new Error('UI 测试需要 Node.js 22 或更高版本。');
 const root = process.cwd();
 const directory = await mkdtemp(join(tmpdir(), 'humanflow-ui-'));
 // Webview 由扩展把样式表与素材改成 vscode-webview URI；离线检查改为内联 CSS，并把本地素材转成 data URI。
@@ -45,17 +47,39 @@ const chromiumCandidates = [process.env.HUMANFLOW_CHROMIUM, process.env.CHROME_P
 const chromium = chromiumCandidates.find(candidate => existsSync(candidate));
 if (!chromium) throw new Error('未找到 Chromium/Chrome，请设置 HUMANFLOW_CHROMIUM 指向可执行文件；已尝试：' + chromiumCandidates.join('、'));
 const child = spawn(chromium, ['--headless', '--disable-gpu', '--remote-debugging-port=0', '--user-data-dir=' + directory, 'about:blank'], { windowsHide: true });
-const endpoint = await new Promise((resolve, reject) => {
-  let output = '';
-  child.stderr.on('data', chunk => { output += chunk; const match = output.match(/DevTools listening on (ws:\/\/[^\s]+)/); if (match) resolve(match[1]); });
-  child.once('error', reject);
+let ws, sequence = 0; const pending = new Map();
+const failPending = error => { for (const request of pending.values()) request.reject(error); pending.clear(); };
+child.once('exit', code => failPending(new Error(`测试浏览器已退出（${code}）`)));
+const call = (method, params = {}, sessionId, timeoutMs = 15000) => new Promise((resolve, reject) => {
+  if (ws?.readyState !== WebSocket.OPEN) { reject(new Error('CDP 连接未打开')); return; }
+  const id = ++sequence;
+  const finish = (handler, value) => { clearTimeout(timer); pending.delete(id); handler(value); };
+  const timer = setTimeout(() => finish(reject, new Error(`CDP 请求超时：${method}`)), timeoutMs);
+  pending.set(id, { resolve: value => finish(resolve, value), reject: error => finish(reject, error) });
+  try { ws.send(JSON.stringify({ id, method, params, sessionId })); } catch (error) { finish(reject, error); }
 });
-const ws = new WebSocket(endpoint);
-await new Promise(resolve => ws.addEventListener('open', resolve));
-let sequence = 0; const pending = new Map();
-ws.addEventListener('message', event => { const data = JSON.parse(event.data); if (pending.has(data.id)) { const { resolve, reject } = pending.get(data.id); pending.delete(data.id); data.error ? reject(data.error) : resolve(data.result); } });
-const call = (method, params = {}, sessionId) => new Promise((resolve, reject) => { const id = ++sequence; pending.set(id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params, sessionId })); });
 try {
+  const endpoint = await new Promise((resolve, reject) => {
+    let output = '';
+    const finish = (handler, value) => { clearTimeout(timer); child.stderr.off('data', onData); child.off('error', onError); child.off('exit', onExit); handler(value); };
+    const onData = chunk => { output = (output + chunk).slice(-8000); const match = output.match(/DevTools listening on (ws:\/\/[^\s]+)/); if (match) finish(resolve, match[1]); };
+    const onError = error => finish(reject, error);
+    const onExit = code => finish(reject, new Error(`浏览器启动失败（${code}）`));
+    const timer = setTimeout(() => finish(reject, new Error('等待浏览器调试端口超时')), 15000);
+    child.stderr.on('data', onData); child.once('error', onError); child.once('exit', onExit);
+  });
+  child.stderr.resume();
+  ws = new WebSocket(endpoint);
+  ws.addEventListener('close', () => failPending(new Error('CDP 连接已关闭')));
+  ws.addEventListener('error', () => failPending(new Error('CDP 连接失败')));
+  await new Promise((resolve, reject) => {
+    const finish = (handler, value) => { clearTimeout(timer); ws.removeEventListener('open', opened); ws.removeEventListener('error', failed); ws.removeEventListener('close', failed); handler(value); };
+    const opened = () => finish(resolve);
+    const failed = () => finish(reject, new Error('无法连接浏览器调试端口'));
+    const timer = setTimeout(() => finish(reject, new Error('连接浏览器调试端口超时')), 10000);
+    ws.addEventListener('open', opened); ws.addEventListener('error', failed); ws.addEventListener('close', failed);
+  });
+  ws.addEventListener('message', event => { const data = JSON.parse(event.data); const request = pending.get(data.id); if (request) data.error ? request.reject(data.error) : request.resolve(data.result); });
   const { targetInfos } = await call('Target.getTargets');
   const { sessionId } = await call('Target.attachToTarget', { targetId: targetInfos.find(x => x.type === 'page').targetId, flatten: true });
   const send = (method, params) => call(method, params, sessionId);
@@ -76,8 +100,11 @@ try {
   assert.equal(/\{\{\w+\}\}/.test(html), false, '面板模板占位符未被替换');
   await send('Page.setDocumentContent', { frameId: (await send('Page.getFrameTree')).frameTree.frame.id, html });
   await evaluate('window.acquireVsCodeApi = () => ({ getState: () => window.saved, setState: value => window.saved = value, postMessage: message => (window.sent ??= []).push(message) });');
+  await evaluate(await readFile(root + '/media/i18n.js', 'utf8'));
   await evaluate(await readFile(root + '/media/markdown.js', 'utf8'));
   await evaluate(await readFile(root + '/media/workspace.js', 'utf8'));
+  await evaluate(await readFile(root + '/media/confirmation.js', 'utf8'));
+  await evaluate(await readFile(root + '/media/findings.js', 'utf8'));
   await evaluate(await readFile(root + '/media/panel.js', 'utf8'));
   const history = Array.from({ length: 100 }, (_, index) => [
     { id: `u${index}`, turnId: String(index + 1), role: '你', text: `请求 ${index + 1}：优化当前项目的交互与 UI` },
@@ -88,9 +115,9 @@ try {
     { id: 'f1', path: 'src/satlib.c', line: 12, title: '坐标转换方向可能与项目约定不一致', evidence: 'expected: ECI → VVLH\ncurrent: VVLH → ECI', impact: '影响姿态解算结果', status: 'open' },
     { id: 'f2', path: 'test/attitude.m', line: 3, title: '边界处理可以复用已有函数', evidence: '两个调用点重复处理空数组', impact: '减少维护点，保留空数组行为', status: 'deferred', category: 'simplification', replacement: '复用现有 normalizeInput，使用空数组和常规输入核对输出一致。' },
   ];
-  const state = { taskId: 'a', taskTitle: '优化项目交互', provider: 'deepseek', scope: '/workspace/project', selected: '', status: '就绪',
+  const state = { type: 'snapshot', taskId: 'a', taskTitle: '优化项目交互', provider: 'deepseek', scope: '/workspace/project', selected: '', status: '就绪',
     models: [{ model: 'deepseek-flash', label: 'DeepSeek Flash', efforts: ['low'] }], choice: { model: 'deepseek-flash', effort: 'low' }, history,
-    turns: [{ id: '1', status: 'completed' }], findings, checks: [{ command: 'npm test', reason: '确认未破坏既有行为' }],
+    turns: [{ id: '1', status: 'completed' }], findings, checks: [{ id: 'c1', revision: 0, findingIds: [], command: 'npm test', reason: '确认未破坏既有行为' }],
     decisions: [{ id: 'd1', text: 'C_ab 表示 b → a 的坐标变换', status: '用户确认', turnId: '1' }],
     goal: '保持接口不变', budget: { enabled: false, paths: [] }, threadMode: 'rebuild',
     contextDetails: { characters: 12000, historyCharacters: 6000, bufferCharacters: 4000, stateCharacters: 2000, mode: '重建上下文', omittedEntries: 2, files: [] } };
@@ -105,7 +132,14 @@ try {
   const oldRequests = await evaluate('window.sent.length');
   await evaluate("document.querySelector('#findings .hf-finding-card__location').click(); document.querySelector('#findings .hf-card__footer button').click(); document.getElementById('discuss-findings').click()");
   assert.equal(await evaluate('window.sent.length'), oldRequests, '旧宿主不能收到不支持的问题操作');
-  state.protocol = 3; await publish();
+  state.protocol = 7; await publish();
+  assert.equal(await evaluate("document.getElementById('select-focus-file').disabled"), false);
+  await evaluate("document.getElementById('select-focus-file').click()");
+  assert.equal(await evaluate("window.sent.at(-1).type"), 'selectFocusFile');
+  assert.equal(await evaluate("window.sent.at(-1).taskId"), state.taskId);
+  state.busy = true; await publish();
+  assert.equal(await evaluate("document.getElementById('select-focus-file').disabled"), true);
+  state.busy = false; await publish();
   assert.equal(await evaluate("document.getElementById('protocol-warning').hidden"), true);
   // 设计系统接线：Token、素材与组件类必须真正生效。
   assert.equal(await evaluate("getComputedStyle(document.documentElement).getPropertyValue('--hf-text-title').trim()"), '16px');
@@ -120,7 +154,7 @@ try {
   assert.equal(await evaluate("document.querySelectorAll('#checks .hf-card').length"), 1);
   assert.equal(await evaluate("document.querySelectorAll('#decisions .hf-decision-card').length"), 1);
   assert.equal(await evaluate("document.querySelectorAll('#context-meter .hf-context-meter__row').length"), 3);
-  assert.equal(await evaluate("document.getElementById('audit-progress-label').textContent"), '1 / 2');
+  assert.equal(await evaluate("document.getElementById('audit-progress-label').textContent"), '0 / 2');
   assert.equal(await evaluate("document.getElementById('plan-summary').textContent"), '（已设任务目标 · 1 条固定决策）');
   assert.equal(await evaluate("document.getElementById('task-title').textContent"), '优化项目交互');
   // 事件接线回归：面板每个入口都必须真正发出对应消息（曾漏绑 #bind，导致更新关注点无效）。
@@ -219,6 +253,27 @@ try {
   assert.equal(await evaluate("document.getElementById('apply').disabled"), true);
   await evaluate("document.getElementById('dependencies').click()");
   assert.equal(await evaluate("document.getElementById('apply').disabled"), false);
+  // 关闭弹窗由宿主授权；重复消息、缩小和取消都不能丢失勾选或依赖确认。
+  await evaluate("document.getElementById('close-panel').click()");
+  assert.equal(await evaluate('window.sent.at(-1).type'), 'closePanel');
+  const confirmClose = { type: 'confirmationRequest', requestId: 'close-ui', taskId: 'a', kind: 'closePanel', title: '操作确认', detail: '关闭面板会停止当前模型请求和验证；候选、草稿与讨论仍保留，可重新打开继续。', acceptLabel: '关闭面板' };
+  await evaluate(`window.dispatchEvent(new MessageEvent('message', {data:${JSON.stringify(confirmClose)}}))`);
+  assert.equal(await evaluate("document.getElementById('operation-confirmation').open"), true);
+  assert.equal(await evaluate('document.activeElement.id'), 'confirmation-cancel');
+  await evaluate("document.getElementById('confirmation-remember').click()");
+  await evaluate(`window.dispatchEvent(new MessageEvent('message', {data:${JSON.stringify(confirmClose)}}))`);
+  assert.equal(await evaluate("document.getElementById('confirmation-remember').checked"), true);
+  await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 640, deviceScaleFactor: 1, mobile: false });
+  assert.equal(await evaluate("document.getElementById('operation-confirmation').getBoundingClientRect().width <= innerWidth"), true);
+  await writeFile(join(directory, 'confirmation-narrow.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  assert.deepEqual(await evaluate('({accepted:window.sent.at(-1).accepted, dontAskAgain:window.sent.at(-1).dontAskAgain})'), { accepted: false, dontAskAgain: false });
+  await evaluate("window.dispatchEvent(new MessageEvent('message', {data:{type:'confirmationClosed',requestId:'close-ui'}}))");
+  assert.equal(await evaluate("document.querySelector('#files input').checked"), true);
+  assert.equal(await evaluate("document.getElementById('dependencies').checked"), true);
+  assert.equal(await evaluate("document.getElementById('operation-confirmation').open"), false);
+  await send('Emulation.setDeviceMetricsOverride', { width: 1080, height: 800, deviceScaleFactor: 1, mobile: false });
   // 本地交互（不发消息）：文件导航、检查点按钮必须仍然有效。
   await evaluate("document.getElementById('file-next').click()");
   assert.equal(await evaluate("document.getElementById('file-position').textContent"), '1 / 1');
@@ -266,6 +321,8 @@ try {
   assert.equal(await askCount(), asksBefore, '中文输入法确认不应发送');
   await evaluate("document.getElementById('question').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',ctrlKey:true,bubbles:true}))");
   assert.equal(await askCount(), asksBefore + 1);
+  assert.equal(await evaluate("document.getElementById('question').value"), '键盘发送', '宿主确认前保留草稿');
+  await evaluate("window.dispatchEvent(new MessageEvent('message', {data: {...window.sent.filter(x=>x.type==='ask').at(-1), type:'requestStarted'}}))");
   state.revision = 120; state.busy = true; await publish();
   await evaluate("document.getElementById('question').value = '忙碌时保留草稿'; document.getElementById('question').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',metaKey:true,bubbles:true}))");
   assert.equal(await askCount(), asksBefore + 1, '忙碌时快捷键不应发送');
@@ -288,7 +345,7 @@ try {
   assert.equal(await evaluate("document.getElementById('question').value"), '忙碌时保留草稿');
   assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), false);
   assert.equal(await evaluate("document.getElementById('discuss-findings').disabled"), true);
-  state.protocol = 3; state.revision++; await publish();
+  state.protocol = 7; state.revision++; await publish();
   assert.equal(await evaluate("document.getElementById('discuss-findings').disabled"), false);
   state.taskId = 'attachment-other'; state.revision++; await publish();
   assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), true);
@@ -306,6 +363,8 @@ try {
   await writeFile(join(directory, 'multi-findings.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
   await evaluate("document.getElementById('form').requestSubmit()");
   assert.deepEqual(await evaluate('window.sent.filter(message => message.type === "ask").at(-1).findingIds'), ['f1', 'f2']);
+  assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), false);
+  await evaluate("window.dispatchEvent(new MessageEvent('message', {data: {...window.sent.filter(x=>x.type==='ask').at(-1), type:'requestStarted'}}))");
   assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), true);
   await evaluate("document.querySelector('#findings input[type=checkbox]').click(); document.getElementById('discuss-findings').click(); document.getElementById('remove-finding-attachments').click()");
   assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), true);
@@ -315,7 +374,150 @@ try {
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
   assert.equal(await evaluate("document.querySelector('.composer').scrollWidth <= document.querySelector('.composer').clientWidth"), true);
   await writeFile(join(directory, 'narrow-light.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+  // 在有候选、引用、中文正文和未保存设置时切换，验证只改变界面文案。
+  await evaluate("document.getElementById('question').value = '发送 {0} <script>中文草稿</script>'; document.getElementById('task-plan').open = true; document.getElementById('goal').value = '未保存目标'; document.getElementById('budget-enabled').checked = true; document.getElementById('budget-enabled').onchange(); document.getElementById('budget-files').value = '3'; document.querySelector('#files details').open = true; if (!document.querySelector('#files input').checked) document.querySelector('#files input').click(); document.getElementById('tab-findings').click(); if (!document.querySelector('#findings input').checked) document.querySelector('#findings input').click(); document.getElementById('discuss-findings').click(); document.getElementById('conversation').scrollTop = 0");
+  const beforeLanguage = await evaluate("({draft:document.getElementById('question').value, history:document.querySelector('#history .history-entry').textContent, code:document.querySelector('#files .hf-hunk__code').textContent, finding:document.querySelector('#findings .hf-finding-card__summary').textContent, scroll:document.getElementById('conversation').scrollTop})");
+  const switchLanguage = language => evaluate(`document.getElementById('ui-language').value = ${JSON.stringify(language)}; document.getElementById('ui-language').dispatchEvent(new Event('change'))`);
+  await switchLanguage('en');
+  assert.equal(await evaluate('document.documentElement.lang'), 'en');
+  assert.equal(await evaluate("document.getElementById('send').textContent"), 'Send');
+  assert.equal(await evaluate("document.getElementById('new-task').textContent"), 'New task');
+  assert.equal(await evaluate("document.getElementById('tab-findings').textContent"), 'Findings & Validation (2)');
+  assert.equal(await evaluate("document.getElementById('question').value"), beforeLanguage.draft);
+  assert.equal(await evaluate("document.getElementById('goal').value"), '未保存目标');
+  assert.equal(await evaluate("document.getElementById('budget-files').value"), '3');
+  assert.equal(await evaluate("document.getElementById('budget-fields').hidden"), false);
+  assert.equal(await evaluate("document.querySelector('#files input').checked"), true);
+  assert.equal(await evaluate("document.querySelector('#files details').open"), true);
+  assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), false);
+  assert.equal(await evaluate("document.querySelector('#files .hf-hunk__code').textContent"), beforeLanguage.code);
+  assert.equal(await evaluate("document.querySelector('#findings .hf-finding-card__summary').textContent"), beforeLanguage.finding);
+  assert.equal(await evaluate("document.getElementById('history').textContent.includes('这是回复正文。')"), true);
+  assert.equal(await evaluate("document.getElementById('conversation').scrollTop"), beforeLanguage.scroll);
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
+  assert.equal(await evaluate("document.querySelector('.composer').scrollWidth <= document.querySelector('.composer').clientWidth"), true);
+  await writeFile(join(directory, 'english-narrow.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+  await send('Emulation.setDeviceMetricsOverride', { width: 1080, height: 800, deviceScaleFactor: 1, mobile: false });
+  await evaluate("document.getElementById('tab-changes').click()");
+  await writeFile(join(directory, 'english-changes.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+  // 宿主确认语言时也不能覆盖折叠设置中的未保存输入。
+  await evaluate("document.getElementById('task-plan').open = false");
+  state.uiLanguage = 'en'; state.status = '本轮完成，可继续追问。候选代码尚未应用。'; state.revision++; await publish();
+  assert.equal(await evaluate("document.getElementById('goal').value"), '未保存目标');
+  assert.equal(await evaluate("document.getElementById('budget-files').value"), '3');
+  assert.equal(await evaluate("document.getElementById('status').textContent"), 'Turn complete. Continue with a follow-up. Proposed code has not been applied.');
+  await switchLanguage('zh-CN');
+  state.revision++; await publish();
+  assert.equal(await evaluate('document.documentElement.lang'), 'zh-CN', '旧快照不能撤销正在保存的语言选择');
+  state.uiLanguage = 'zh-CN'; state.revision++; await publish();
+  assert.equal(await evaluate("document.getElementById('send').textContent"), '发送');
+  assert.equal(await evaluate("document.getElementById('question').value"), beforeLanguage.draft);
+  assert.deepEqual(await evaluate("window.sent.filter(message => message.type === 'uiLanguage').map(message => message.language)"), ['en', 'zh-CN']);
+  for (const id of ['open-settings', 'open-user-settings', 'open-workspace-settings']) {
+    await evaluate(`document.getElementById('${id}').click()`);
+  }
+  assert.deepEqual(await evaluate('window.sent.slice(-3).map(message => message.type)'), ['openSettings', 'openUserSettings', 'openWorkspaceSettings']);
+  // 新问题视图：由真实浏览器发送消息，使用领域规则模拟宿主发布更新。
+  const owner = normalizeFindings({ id: 'lifecycle', findings: Array.from({ length: 12 }, (_, n) => ({ id: 'issue-' + n, title: '问题 ' + n, evidence: '依据', impact: '影响', path: 'src/item' + n + '.js', line: n + 1, status: n < 10 ? 'resolved' : 'open' })),
+    checks: [{ id: 'linked-check', command: 'echo reviewed', reason: '核对行为', batchId: 'latest' }], validations: [{ id: 'good', command: 'echo good', exitCode: 0, stale: false, at: 1, findingIds: ['issue-11'] }, { id: 'expired', command: 'echo stale', exitCode: 0, stale: true, staleReason: '代码变化', findingIds: ['issue-11'] }] });
+  Object.assign(state, { taskId: owner.id, findings: owner.findings, checks: owner.checks, validations: owner.validations, latestCheckBatchId: 'latest', revision: state.revision + 1 });
+  await publish();
+  const setFilter = async (id, value, event = 'change') => evaluate('document.getElementById(' + JSON.stringify(id) + ').value = ' + JSON.stringify(value) + '; document.getElementById(' + JSON.stringify(id) + ').dispatchEvent(new Event(' + JSON.stringify(event) + '))');
+  assert.equal(await evaluate(`document.querySelectorAll('#findings .hf-finding-card').length`), 2);
+  assert.equal(await evaluate(`document.getElementById('audit-progress-label').textContent`), '10 / 12');
+  assert.equal(await evaluate(`document.querySelector('#findings .hf-finding-card__id').textContent`), 'F-011');
+  await setFilter('finding-view', 'ended');
+  assert.equal(await evaluate(`document.querySelectorAll('#findings .hf-finding-card').length`), 10);
+  assert.equal(await evaluate(`[...document.querySelectorAll('#findings button')].some(button => button.textContent === '仅处理此问题')`), false);
+  await setFilter('finding-search', 'F-001', 'input');
+  assert.equal(await evaluate(`document.querySelectorAll('#findings .hf-finding-card').length`), 1);
+  await evaluate(`document.querySelector('#findings input').click(); document.getElementById('discuss-findings').click()`);
+  const referencedDraft = await evaluate(`document.getElementById('question').value`);
+  await setFilter('finding-view', 'attention'); await setFilter('finding-search', '', 'input');
+  assert.equal(await evaluate(`document.querySelectorAll('#findings input:checked').length`), 0);
+  assert.equal(await evaluate(`document.getElementById('finding-attachments').hidden`), false);
+  assert.equal(await evaluate(`document.getElementById('question').value`), referencedDraft);
+  await evaluate(`document.getElementById('tab-findings').click(); document.getElementById('findings-panel').open = true; document.getElementById('choose-issue-10').click(); document.getElementById('close-findings').click()`);
+  const messagesBefore = await evaluate(`window.sent.filter(message => message.type === 'findingTransition').length`);
+  await evaluate(`document.querySelector('#finding-resolution .actions button').click()`);
+  assert.equal(await evaluate(`window.sent.filter(message => message.type === 'findingTransition').length`), messagesBefore, '关闭未填写依据时不能提交');
+  await evaluate(`document.getElementById('finding-note-issue-10').value = '人工核对说明'; document.getElementById('finding-note-issue-10').dispatchEvent(new Event('input')); document.querySelector('#finding-resolution select[aria-label="确认依据"]').value = 'manual'; document.querySelector('#finding-resolution select[aria-label="确认依据"]').dispatchEvent(new Event('change'))`);
+  await switchLanguage('en');
+  assert.equal(await evaluate(`document.getElementById('finding-note-issue-10').value`), '人工核对说明');
+  assert.equal(await evaluate(`document.querySelector('#finding-resolution select[aria-label="Confirmation basis"]').value`), 'manual');
+  await switchLanguage('zh-CN');
+  await send('Emulation.setDeviceMetricsOverride', { width: 520, height: 760, deviceScaleFactor: 1, mobile: false });
+  await evaluate(`document.getElementById('finding-resolution').scrollIntoView({block:'start'})`);
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
+  await writeFile(join(directory, 'finding-resolution-narrow.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+  const applyTransition = async () => {
+    const message = await evaluate('window.sent.at(-1)'); assert.equal(message.type, 'findingTransition');
+    const changed = transitionFindings(owner, message); state.findings = owner.findings; state.revision++; await publish();
+    const ack = { type: 'findingTransitionComplete', taskId: owner.id, requestId: message.requestId, records: changed.map(item => ({ id: item.id, revision: item.revision, status: item.status, event: item.statusHistory.at(-1) })) };
+    await evaluate('window.dispatchEvent(new MessageEvent("message", {data:' + JSON.stringify(ack) + '}))');
+  };
+  await evaluate(`document.querySelector('#finding-resolution .actions button').click()`); await applyTransition();
+  assert.equal(owner.findings[10].status, 'resolved');
+  assert.equal(await evaluate(`document.querySelectorAll('#findings .hf-finding-card').length`), 1);
+  assert.equal(await evaluate('document.activeElement.id'), 'finding-view');
+  await evaluate(`document.querySelector('#finding-undo button').click()`); await applyTransition();
+  assert.equal(owner.findings[10].status, 'open');
+  assert.equal(owner.findings[10].statusHistory.length, 2);
+  await evaluate(`document.getElementById('choose-issue-10').click(); document.getElementById('choose-issue-11').click(); document.querySelector('#checks .actions button').click()`);
+  const association = await evaluate('window.sent.at(-1)'); assert.equal(association.type, 'findingEvidence');
+  linkFindingEvidence(owner, association); state.checks = owner.checks; state.revision++; await publish();
+  assert.deepEqual(owner.checks[0].findingIds, ['issue-10', 'issue-11']);
+  await evaluate(`document.querySelector('#checks .hf-card__footer button').click()`);
+  assert.equal(await evaluate('window.sent.at(-1).checkId'), 'linked-check');
+  await evaluate(`document.getElementById('clear-findings').click(); document.getElementById('choose-issue-11').click(); document.getElementById('close-findings').click()`);
+  await evaluate(`document.querySelector('#finding-resolution select[aria-label="确认依据"]').value = 'validation'; document.querySelector('#finding-resolution select[aria-label="确认依据"]').dispatchEvent(new Event('change'))`);
+  assert.equal(await evaluate(`document.querySelectorAll('#finding-resolution input[type=checkbox]').length`), 1, '过期记录不能作为有效依据');
+  await evaluate(`document.getElementById('finding-note-issue-11').value = '已核对测试覆盖'; document.getElementById('finding-note-issue-11').dispatchEvent(new Event('input')); document.querySelector('#finding-resolution input').click(); document.querySelector('#finding-resolution .actions button').click()`); await applyTransition();
+  assert.deepEqual(owner.findings[11].statusHistory.at(-1).resolution.validationIds, ['good']);
+  const scale = normalizeFindings({ findings: Array.from({ length: 500 }, (_, n) => ({ id: 'scale-' + n, title: '历史问题 ' + n, evidence: '问题依据'.repeat(40), impact: '影响范围', path: 'src/scale.js', line: n + 1, status: n < 350 ? 'resolved' : n % 2 ? 'pendingVerification' : 'open' })),
+    validations: Array.from({ length: 200 }, (_, n) => ({ id: 'scale-validation-' + n, command: 'echo validation-' + n, cwd: '/project', exitCode: n % 3 ? 0 : 1, stale: Boolean(n % 5), at: n, versions: Object.fromEntries(Array.from({ length: 50 }, (_, f) => ['file' + f, 'hash-' + f])) })) });
+  Object.assign(state, { taskId: 'scale', findings: scale.findings, validations: scale.validations, checks: owner.checks, revision: state.revision + 1 });
+  const measuredPublish = () => evaluate(`(() => { const started = performance.now(); window.dispatchEvent(new MessageEvent('message', {data: ${JSON.stringify(state)}})); return performance.now() - started; })()`);
+  const initialScaleMs = await measuredPublish();
+  await evaluate(`document.getElementById('tab-findings').click(); document.getElementById('findings-panel').open = true`);
+  assert.equal(await evaluate(`document.querySelectorAll('#findings .hf-finding-card').length`), 50);
+  assert.equal(await evaluate(`document.querySelectorAll('#validation-records .hf-card').length`), 50);
+  let refreshScaleMs = 0;
+  for (let n = 0; n < 20; n++) { state.revision++; state.status = '状态刷新 ' + n; refreshScaleMs += await measuredPublish(); }
+  assert.ok(refreshScaleMs < 3000, '大量记录的状态刷新不应阻塞交互');
+  await evaluate(`document.getElementById('load-findings').click()`);
+  assert.equal(await evaluate(`document.querySelectorAll('#findings .hf-finding-card').length`), 100);
+  await evaluate(`document.querySelectorAll('#findings input[type=checkbox]')[99].click()`);
+  await setFilter('finding-view', 'ended');
+  assert.equal(await evaluate(`document.querySelectorAll('#findings .hf-finding-card').length`), 50);
+  assert.equal(await evaluate(`document.querySelectorAll('#findings input:checked').length`), 0);
+  await evaluate(`document.querySelector('.finding-filters').scrollIntoView({block:'start'})`);
+  await writeFile(join(directory, 'ended-findings-narrow.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+  console.log(JSON.stringify({ findings: 500, validations: 200, initialScaleMs: Math.round(initialScaleMs), refresh20Ms: Math.round(refreshScaleMs) }));
+  console.log(JSON.stringify({ browser: (await call('Browser.getVersion')).product, node: process.version }));
   console.log(JSON.stringify({ rounds: 100, statusUpdates: 20, elapsedMs: Math.round(updateMs), screenshotDirectory: directory }));
-  console.log('PASS: design system, tokens, icons, empty states, status chips, review bar, selection sync, grouping, navigation, folding, reading position, nested state, task switching, safe text, wide/narrow layout');
+  // 模拟原生叉号销毁页面后创建新页面，完全依靠宿主保存的 UI 状态恢复候选。
+  const preservedUI = { view: 'changes', candidate: { batchId: 'restored', selection: [[0]], dependencies: true, fileIndex: 0 }, open: { 'candidate-restored-0-0': true } };
+  const restored = { ...state, taskId: 'restored-task', uiState: preservedUI, draft: '关闭前的草稿', suggestion: { ...state.suggestion, batchId: 'restored' } };
+  await send('Page.navigate', { url: 'about:blank' });
+  await send('Page.setDocumentContent', { frameId: (await send('Page.getFrameTree')).frameTree.frame.id, html });
+  await evaluate('window.acquireVsCodeApi = () => ({ getState: () => undefined, setState: value => window.saved = value, postMessage: message => (window.sent ??= []).push(message) });');
+  for (const name of ['i18n', 'markdown', 'workspace', 'confirmation', 'findings', 'panel']) await evaluate(await readFile(root + '/media/' + name + '.js', 'utf8'));
+  await evaluate(`window.dispatchEvent(new MessageEvent('message', {data:${JSON.stringify(restored)}}))`);
+  assert.equal(await evaluate("document.getElementById('question').value"), '关闭前的草稿');
+  assert.equal(await evaluate("document.querySelector('#files input').checked"), true);
+  assert.equal(await evaluate("document.querySelector('#files details').open"), true);
+  assert.equal(await evaluate("document.getElementById('dependencies').checked"), true);
+  assert.equal(await evaluate("document.getElementById('view-changes').hidden"), false);
+  await evaluate("document.getElementById('form').requestSubmit()");
+  const denied = await evaluate("window.sent.filter(x => x.type === 'ask').at(-1)");
+  await evaluate(`window.dispatchEvent(new MessageEvent('message', {data:${JSON.stringify({ ...denied, type: 'requestRejected' })}}))`);
+  assert.equal(await evaluate("document.getElementById('question').value"), '关闭前的草稿');
+  assert.equal(await evaluate("document.getElementById('send').disabled"), false);
+  assert.equal(await evaluate("document.querySelector('#files input').checked"), true);
+  console.log('PASS: design system, interaction, safe text, wide/narrow layout, language switching, drafts, selections, finding references, confirmation, page recreation');
   console.log(directory);
-} finally { await call('Browser.close'); ws.close(); }
+} finally {
+  if (ws?.readyState === WebSocket.OPEN) await call('Browser.close', {}, undefined, 2000).catch(() => {});
+  failPending(new Error('浏览器测试已结束')); ws?.close(); child.kill();
+}

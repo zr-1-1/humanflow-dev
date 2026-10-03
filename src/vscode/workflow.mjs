@@ -3,6 +3,8 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { contentVersion } from './context-builder.mjs';
 import { inside } from './task-state.mjs';
+import { normalizeFindings, isClosedFinding, findingSnapshot, findingForContext } from './finding-state.mjs';
+export { updateFinding } from './finding-state.mjs';
 
 // 记录生成前的文件元数据，不读取全仓内容；未覆盖目录和数量上限显式返回。
 export async function captureBaseline(root, limit = 5000) {
@@ -46,13 +48,20 @@ export async function resolveReferences(root, references) {
   }
   return result;
 }
-export function addFindings(task, findings) {
-  task.findings ??= [];
+export function addFindings(task, findings, { turnId } = {}) {
+  normalizeFindings(task);
   for (const finding of findings) {
     const existing = task.findings.find(item => item.path === finding.path && item.title === finding.title && item.evidence === finding.evidence
       && (item.category ?? 'defect') === (finding.category ?? 'defect'));
-    if (!existing) task.findings.push({ ...finding, id: randomUUID(), status: 'open' });
+    if (!existing) task.findings.push({ ...finding, id: randomUUID(), status: 'open', displayNumber: task.nextFindingNumber++,
+      revision: 0, statusHistory: [], createdAt: Date.now(), updatedAt: Date.now(), needsReview: false, sourceTurnId: turnId });
     else {
+      if (isClosedFinding(existing)) {
+        existing.needsReview = true;
+        existing.latestObservation = { ...findingSnapshot(finding), at: Date.now(), turnId,
+          occurrence: (existing.latestObservation?.occurrence ?? 0) + 1 };
+      }
+      existing.updatedAt = Date.now(); existing.revision++;
       // 新一轮审查提供了新位置，保留人工处理状态，重新建立代码锚点。
       existing.line = finding.line;
       existing.impact = finding.impact;
@@ -66,6 +75,13 @@ export function addFindings(task, findings) {
 
 // 锚点只保留目标行及相邻两行，用于跨编辑、磁盘更新和任务恢复定位。
 export function locateFinding(finding, text, { initialize = false } = {}) {
+  const before = [finding.line, finding.locationStatus, finding.anchor?.version];
+  locateFindingAnchor(finding, text, { initialize });
+  if (finding.id && JSON.stringify(before) !== JSON.stringify([finding.line, finding.locationStatus, finding.anchor?.version])) {
+    finding.revision = (finding.revision ?? 0) + 1;
+  }
+}
+function locateFindingAnchor(finding, text, { initialize = false } = {}) {
   const normalized = text.replace(/\r\n/g, '\n');
   const version = contentVersion(normalized);
   if (finding.anchor?.version === version) { finding.locationStatus = 'current'; return; }
@@ -104,11 +120,4 @@ export function locateFinding(finding, text, { initialize = false } = {}) {
   finding.locationStatus = 'current';
 }
 
-export const findingContext = ({ anchor, ...finding }) => finding;
-export function updateFinding(task, id, status) {
-  if (!['open', 'deferred', 'dismissed', 'pendingVerification', 'resolved'].includes(status)) throw new Error('问题状态无效');
-  const finding = task.findings.find(item => item.id === id);
-  if (!finding) throw new Error('问题不存在');
-  finding.status = status;
-  return finding;
-}
+export const findingContext = findingForContext;

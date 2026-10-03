@@ -4,13 +4,18 @@ const { join, resolve, basename, extname } = require('node:path');
 const { readFileSync, realpathSync } = require('node:fs');
 const { randomBytes } = require('node:crypto');
 // 面板 JS 每次打开面板都从磁盘读取，可能比正在运行的扩展宿主更新；用协议号识别这种不一致。
-const PANEL_PROTOCOL = 3;
+const PANEL_PROTOCOL = 7;
 // 开发者指令变化后重建持久线程，避免继续使用旧审查规则。
 const SUGGESTION_POLICY_VERSION = 1;
 let shutdown = async () => {};
 exports.deactivate = () => shutdown();
 
 exports.activate = async context => {
+  let uiLanguage = context.globalState?.get('humanflow.uiLanguage', 'zh-CN') === 'en' ? 'en' : 'zh-CN';
+  const uiI18n = require('../../media/i18n.js').createHumanflowI18n(uiLanguage);
+  const t = uiI18n.t;
+  const { readTimeoutSettings } = require('./settings.cjs');
+  const timeoutSettings = () => readTimeoutSettings(vscode.workspace.getConfiguration('humanflow'));
   const load = path => import(pathToFileURL(join(context.extensionPath, path)).href);
   const { createLocalClient } = await load('src/codex/local-client.mjs');
   const { startSuggestionSession, runSuggestionTurn: requestSuggestionTurn } = await load('src/codex/suggestion-session.mjs');
@@ -30,7 +35,9 @@ exports.activate = async context => {
       progressTimer ??= setTimeout(flushProgress, 100);
     };
     onProgress([]);
-    try { return await requestSuggestionTurn(client, threadId, prompt, { ...options, onProgress }); }
+    const timeouts = timeoutSettings();
+    client.modelRequestTimeoutMs = timeouts.modelRequestTimeoutMs;
+    try { return await requestSuggestionTurn(client, threadId, prompt, { ...timeouts.turn, ...options, onProgress }); }
     catch (error) {
       if (typeof error.rawResponse === 'string') {
         failedResponse = error.rawResponse;
@@ -44,17 +51,19 @@ exports.activate = async context => {
   const { captureBaseline, assertBaseline, resolveReferences, addFindings, updateFinding, locateFinding, findingContext } = await load('src/vscode/workflow.mjs');
   const { runValidation } = require('./validation.cjs');
   let baseline, references = [], validationExecution;
-  const drafts = new Map();
+  const drafts = new Map(), candidateRuntime = new Map();
+  let shuttingDown = false, closingPanel = false;
   const { listModels, selectModel, explainConnectionError } = await load('src/codex/models.mjs');
   const { selectBatch, applySelectedBatch, saveAcceptedFiles } = await load('src/codex/partial-accept.mjs');
   const { STORAGE_KEY, createTask, restoreTask, inside, samePath, recordOutcome, buildContext } = await load('src/vscode/task-state.mjs');
   const { normalizeTask, startTurn, changeStats, validateBudget, budgetViolations, captureVersions, sanitizeFeedback } = await load('src/vscode/task-workflow.mjs');
   const { observeThread, compactThread } = await load('src/codex/thread-observer.mjs');
+  const { transitionFindings, addChecks, linkFindingEvidence, markValidationsStale, isClosedFinding } = await load('src/vscode/finding-state.mjs');
   const roots = () => (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file').map(folder => folder.uri.fsPath);
   let tasks = context.workspaceState.get(STORAGE_KEY, []).map(value => restoreTask(value, roots())).filter(Boolean).map(normalizeTask);
   for (const restored of tasks) {
     for (const turn of restored.turns) if (turn.status === 'running') turn.status = 'cancelled';
-    for (const validation of restored.validations) validation.stale = true;
+    markValidationsStale(restored, '扩展重启后需重新核对');
     for (const batch of restored.batches) if (batch.status === 'pendingReview') batch.status = 'stale';
     for (const turn of restored.turns) if (turn.status === 'pendingReview') turn.status = 'stale';
   }
@@ -63,7 +72,8 @@ exports.activate = async context => {
   const connect = async (cwd, requireKey = true) => {
     const config = vscode.workspace.getConfiguration('humanflow');
     const apiKey = provider === 'deepseek' ? (await context.secrets.get('humanflow.deepseek.apiKey')) || process.env.DEEPSEEK_API_KEY : undefined;
-    const connection = createLocalClient({ cwd, nodePath: config.get('nodePath'), cliPath: config.get('codexJsPath'), provider, apiKey, requireKey });
+    const connection = createLocalClient({ cwd, nodePath: config.get('nodePath'), cliPath: config.get('codexJsPath'), provider, apiKey, requireKey,
+      modelRequestTimeoutMs: timeoutSettings().modelRequestTimeoutMs });
     if (requireKey && task?.webEnabled && controller) {
       const activeTask = task, activeSignal = controller.signal;
       const proxy = config.get('webProxy') || vscode.workspace.getConfiguration('http').get('proxy')
@@ -87,7 +97,40 @@ exports.activate = async context => {
   let models = [], choice = task?.choice ?? {}, loadingModels = false;
   let generation = 0, storageQueue = Promise.resolve(), navigating = false;
   let batch = [];
-  const readText = async path => (await vscode.workspace.openTextDocument(vscode.Uri.file(path))).getText();
+  const { contentVersion } = await load('src/vscode/context-builder.mjs');
+  const knownVersions = new Map();
+  const recentEditors = new Map();
+  const isFocusEditor = (editor, root) => {
+    const document = editor?.document;
+    if (!document || document.isClosed || document.uri.scheme !== 'file'
+        || samePath(document.uri.fsPath, resolve(root, '.vscode/settings.json'))) return false;
+    try { return inside(realpathSync(root), realpathSync(document.uri.fsPath)); } catch { return false; }
+  };
+  const rememberEditor = editor => {
+    for (const root of roots()) if (isFocusEditor(editor, root)) recentEditors.set(root, editor);
+  };
+  rememberEditor(vscode.window.activeTextEditor);
+  if (vscode.window.onDidChangeActiveTextEditor) context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(rememberEditor));
+  const focusEditor = async () => {
+    const active = vscode.window.activeTextEditor;
+    if (isFocusEditor(active, task.root)) { rememberEditor(active); return active; }
+    // 显式选中了另一个项目的代码时不能悄悄复用当前项目的旧目标。
+    if (active?.document.uri.scheme === 'file' && basename(active.document.uri.fsPath) !== 'settings.json'
+        && !inside(task.root, active.document.uri.fsPath)) throw new Error('当前文件不属于本任务项目，请为该项目新建任务');
+    const recent = recentEditors.get(task.root);
+    if (isFocusEditor(recent, task.root)) return recent;
+    recentEditors.delete(task.root);
+    const visible = (vscode.window.visibleTextEditors ?? []).filter(editor => isFocusEditor(editor, task.root));
+    if (visible.length === 1) return visible[0];
+    if (visible.length > 1) {
+      const selected = await vscode.window.showQuickPick(visible.map(editor => ({ label: basename(editor.document.uri.fsPath),
+        description: editor.document.uri.fsPath, editor })), { placeHolder: t('选择要更新关注点的代码文件') });
+      return selected?.editor;
+    }
+    throw new Error('请先打开本地代码文件，或使用“选择文件作为关注点”');
+  };
+  const rememberText = (path, text) => { knownVersions.set(path, contentVersion(text)); return text; };
+  const readText = async path => rememberText(path, (await vscode.workspace.openTextDocument(vscode.Uri.file(path))).getText());
   const refreshFindingLocations = async (owner, { initialize = new Set(), path } = {}) => {
     const grouped = new Map();
     for (const finding of owner.findings ?? []) {
@@ -107,6 +150,17 @@ exports.activate = async context => {
   let panel, snapshot, sourceUri, client, threadId, controller;
   let busy = false, applying = false;
   let state = { scope: '', selected: '', status: task ? '已恢复任务；下轮根据当前代码重建上下文，旧候选不恢复。' : '可直接讨论项目，也可选择代码作为关注点。', history: task?.history ?? [], suggestion: null, stale: false };
+  const { createConfirmations } = require('./confirmation.cjs');
+  const confirmations = createConfirmations({ vscode, taskId: () => task?.id,
+    reveal: () => { if (!panel?.visible) revealPanel(); },
+    send: message => { panel?.webview.postMessage(message); publish(); } });
+  const confirmOperation = (kind, detail, acceptLabel = '确认继续') => confirmations.request(kind, { title: '操作确认', detail, acceptLabel });
+  const hasCandidate = () => Boolean(state.suggestion?.changes?.length || drafts.size);
+  const confirmCandidateChange = detail => !hasCandidate() ? Promise.resolve(true) : confirmOperation('changeContext', detail);
+  const stashCandidate = () => {
+    if (task && hasCandidate()) candidateRuntime.set(task.id, { batch, references, baseline, snapshot, sourceUri,
+      drafts: new Map(drafts), suggestion: state.suggestion, stale: state.stale });
+  };
   if (task?.focus) sourceUri = vscode.Uri.file(task.focus.path);
   const previews = new Map();
   // 最近一次预览的 before/after 文档：预览只保留一个标签页，并且在窗口重载后给出明确失效提示。
@@ -216,20 +270,37 @@ exports.activate = async context => {
       });
       }
     }
-    const next = { protocol: PANEL_PROTOCOL, ...state, uiState: task?.uiState ?? {}, turns: task?.turns ?? [], batches: task?.batches ?? [], validations: task?.validations ?? [], goal: task?.goal ?? '', decisions: task?.decisions ?? [], budget: task?.budget, threadMode: task?.threadMode, contextDetails: task?.contextDetails ?? null, harness: task?.harness ?? null, draft: task?.draft ?? '', taskId: task?.id, webEnabled: task?.webEnabled === true, webSearchProvider: task?.webSearchProvider ?? 'duckduckgo', provider, findings: task?.findings ?? [], checks: task?.checks ?? [], taskTitle: task?.title, focusPath: task?.focus?.path, busy: busy || navigating, models, choice, loadingModels };
+    const next = { protocol: PANEL_PROTOCOL, confirming: Boolean(confirmations.pending), uiLanguage, ...state, uiState: task?.uiState ?? {}, turns: task?.turns ?? [], batches: task?.batches ?? [], validations: task?.validations ?? [], goal: task?.goal ?? '', decisions: task?.decisions ?? [], budget: task?.budget, threadMode: task?.threadMode, contextDetails: task?.contextDetails ?? null, harness: task?.harness ?? null, draft: task?.draft ?? '', taskId: task?.id, webEnabled: task?.webEnabled === true, webSearchProvider: task?.webSearchProvider ?? 'duckduckgo', provider, latestCheckBatchId: task?.latestCheckBatchId, findings: task?.findings ?? [], checks: task?.checks ?? [], taskTitle: task?.title, focusPath: task?.focus?.path, busy: busy || navigating || closingPanel, models, choice, loadingModels };
     const changed = {};
     for (const [key, value] of Object.entries(next)) if (!published || JSON.stringify(value) !== JSON.stringify(published[key])) changed[key] = value;
     const full = force || !published || published.taskId !== next.taskId;
     panel?.webview.postMessage({ type: full ? 'snapshot' : 'patch', revision: ++messageRevision, ...(full ? next : changed) });
     published = structuredClone(next);
   };
-  const invalidate = () => {
+  const invalidate = ({ preserve = false, status = 'stale' } = {}) => {
+    const record = task?.batches?.find(item => item.id === state.suggestion?.batchId);
+    if (!preserve && record?.status === 'pendingReview') {
+      record.status = status;
+      const round = task.turns.find(item => item.id === record.turnId); if (round) round.status = status;
+    }
+    if (!preserve && task) candidateRuntime.delete(task.id);
+    batch = []; references = []; baseline = null; drafts.clear(); state.suggestion = null; state.stale = false;
+  };
+  const markCandidateStale = () => {
     const record = task?.batches?.find(item => item.id === state.suggestion?.batchId);
     if (record?.status === 'pendingReview') {
-      record.status = 'stale';
-      const round = task.turns.find(item => item.id === record.turnId); if (round) round.status = 'stale';
+      record.status = 'stale'; const round = task.turns.find(item => item.id === record.turnId); if (round) round.status = 'stale';
     }
-    batch = []; references = []; baseline = null; drafts.clear(); state.suggestion = null; state.stale = false;
+    state.stale = Boolean(state.suggestion?.changes?.length);
+  };
+  const restoreCandidate = async () => {
+    const cached = candidateRuntime.get(task.id);
+    if (!cached) return;
+    ({ batch, references, baseline, snapshot, sourceUri } = cached);
+    state.suggestion = cached.suggestion; state.stale = cached.stale;
+    drafts.clear(); for (const [key, value] of cached.drafts) drafts.set(key, value);
+    try { await assertBatchCurrent(batch, readText); await assertBaseline(baseline, references); }
+    catch { markCandidateStale(); }
   };
   const chooseRoot = async () => {
     const available = roots();
@@ -237,36 +308,38 @@ exports.activate = async context => {
     const editorRoot = vscode.window.activeTextEditor && vscode.workspace.getWorkspaceFolder(vscode.window.activeTextEditor.document.uri)?.uri.fsPath;
     if (editorRoot && available.includes(editorRoot)) return editorRoot;
     if (available.length === 1) return available[0];
-    return vscode.window.showQuickPick(available, { placeHolder: '选择任务所属项目' });
+    return vscode.window.showQuickPick(available, { placeHolder: t('选择任务所属项目') });
   };
   const newTask = async () => {
     if (busy || loadingModels) return;
     const root = await chooseRoot();
     if (!root) return;
-    await resetClient();
-    invalidate();
+    if (!await confirmCandidateChange('新建任务会离开当前候选；原任务和候选仍保留，可恢复后继续。')) return;
+    stashCandidate(); await resetClient();
+    invalidate({ preserve: true });
     task = createTask(root); tasks.push(task); snapshot = null; sourceUri = null;
     invalidate(); state.status = '已新建任务，可直接提问。旧任务可通过恢复任务打开。'; publish();
   };
   const switchTask = async () => {
     if (busy || loadingModels) return;
-    const item = await vscode.window.showQuickPick(tasks.map(value => ({ label: value.title, description: value.root, id: value.id })), { placeHolder: '恢复本地任务' });
-    if (!item) return;
-    await resetClient(); invalidate(); task = tasks.find(value => value.id === item.id);
-    for (const validation of task.validations) validation.stale = true;
+    const item = await vscode.window.showQuickPick(tasks.map(value => ({ label: value.title, description: value.root, id: value.id })), { placeHolder: t('恢复本地任务') });
+    if (!item || item.id === task?.id) return;
+    if (!await confirmCandidateChange('切换任务会离开当前候选；原任务和候选仍保留，可恢复后继续。')) return;
+    stashCandidate(); await resetClient(); invalidate({ preserve: true }); task = tasks.find(value => value.id === item.id);
+    markValidationsStale(task, '切换关注范围后需重新核对');
     const changedProvider = provider !== (task.provider ?? 'codex');
     provider = task.provider ?? 'codex';
     if (task.focus) task.focus = { path: task.focus.path };
     choice = task.choice ?? {}; snapshot = null;
     await refreshFindingLocations(task);
     sourceUri = task.focus ? vscode.Uri.file(task.focus.path) : null;
-    invalidate(); state.status = '任务已恢复；下轮重建上下文并核对当前代码。'; publish();
+    await restoreCandidate(); state.status = state.suggestion ? '任务已恢复，保留候选已重新核对；应用前仍需检查当前代码。' : '任务已恢复；下轮重建上下文并核对当前代码。'; publish();
     if (changedProvider) { models = []; await refreshModels(); }
   };
   const deleteTask = async () => {
     if (busy || loadingModels || !task) return;
-    const answer = await vscode.window.showWarningMessage('删除当前任务的本地讨论与处理记录？业务文件不会被修改。', { modal: true }, '删除记录');
-    if (answer !== '删除记录') return;
+    if (!await confirmOperation('deleteTask', '删除当前任务的本地讨论、问题、验证和候选记录？此操作无法撤销，业务文件不会被修改。', '删除记录')) return;
+    candidateRuntime.delete(task.id);
     await resetClient();
     tasks = tasks.filter(value => value.id !== task.id);
     task = createTask(task.root); tasks.push(task); snapshot = null; sourceUri = null;
@@ -302,35 +375,54 @@ exports.activate = async context => {
     if (doc.getText() !== snapshot.text) throw new Error('关注代码已变化，本轮候选已失效；可直接重新提问');
     return doc;
   };
-  const bind = async () => {
+  const bind = async (chooseFile = false) => {
     if (busy || loadingModels) throw new Error('请等待当前操作完成');
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.document.uri.scheme !== 'file') throw new Error('请先打开本地代码文件');
     if (!task) await newTask();
     if (!task) return;
-    if (!inside(realpathSync(task.root), realpathSync(editor.document.uri.fsPath))) throw new Error('当前文件不属于本任务项目，请为该项目新建任务');
-    const next = editor.selection.isEmpty ? { path: editor.document.uri.fsPath } : captureBuffer(editor.document.uri.fsPath, editor.document.getText(),
+    const editor = chooseFile ? null : await focusEditor();
+    if (!chooseFile && !editor) return;
+    const selectedUri = chooseFile ? (await vscode.window.showOpenDialog({
+      defaultUri: vscode.Uri.file(task.root + '/'), canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
+      title: t('选择文件作为关注点'), openLabel: t('设为关注文件'),
+    }))?.[0] : editor.document.uri;
+    if (!selectedUri) return;
+    if (selectedUri.scheme !== 'file' || !inside(realpathSync(task.root), realpathSync(selectedUri.fsPath))) throw new Error('当前文件不属于本任务项目，请为该项目新建任务');
+    // 文件选择始终绑定整份文件；先确认可读取，不借用其他编辑器的选区。
+    if (chooseFile) await vscode.workspace.openTextDocument(selectedUri);
+    const next = chooseFile || editor.selection.isEmpty ? { path: selectedUri.fsPath } : captureBuffer(editor.document.uri.fsPath, editor.document.getText(),
       editor.document.offsetAt(editor.selection.start), editor.document.offsetAt(editor.selection.end));
-    snapshot = null;
     const { text, ...focus } = next;
+    if (JSON.stringify(task.focus) === JSON.stringify(focus)) return;
+    if (!await confirmCandidateChange('更新关注点会使当前候选失效；候选原文会保留供查看。')) return;
+    if (!chooseFile && !isFocusEditor(editor, task.root)) throw new Error('关注文件已关闭或无法读取，请重新选择');
+    if (!inside(realpathSync(task.root), realpathSync(selectedUri.fsPath))) throw new Error('当前文件不属于本任务项目，请为该项目新建任务');
+    if (editor) rememberEditor(editor);
+    snapshot = null;
     task.focus = focus;
-    sourceUri = editor.document.uri;
-    invalidate(); state.status = '关注点已更新，任务讨论保留。';
+    sourceUri = selectedUri;
+    markCandidateStale(); state.status = '关注点已更新，任务讨论和候选原文保留。';
     publish();
   };
-  const ask = async (question, findingId, intent = 'discuss', findingIds = []) => {
-    if (busy || loadingModels) return;
+  const ask = async (question, findingId, intent = 'discuss', findingIds = [], requestId) => {
+    const rejected = () => panel?.webview.postMessage({ type: 'requestRejected', taskId: task?.id, requestId });
+    if (busy || loadingModels) { rejected(); return; }
     const turnChoice = selectModel(models, choice.model, choice.effort);
     if (!task) throw new Error('请先打开本地项目并新建任务');
     if (typeof question !== 'string' || !question.trim() || question.length > 12000) throw new Error('请输入不超过 12000 字符的需求');
     if (!Array.isArray(findingIds) || findingIds.length > 50 || findingIds.some(id => !task.findings.some(item => item.id === id))) throw new Error('所选问题已变化，请重新选择（最多 50 个）');
+    if (hasCandidate() && !await confirmOperation('replaceCandidate', '新请求成功后将替换当前候选；失败或取消时仍保留原候选。', '发送新请求')) {
+      rejected(); return;
+    }
+    if (busy || loadingModels || closingPanel) { rejected(); return; }
+    const previousCandidate = { batch, references, baseline, snapshot, sourceUri, suggestion: state.suggestion, stale: state.stale, drafts: new Map(drafts) };
     busy = true;
     controller = new AbortController();
-    invalidate();
+    if (requestId) panel?.webview.postMessage({ type: 'requestStarted', taskId: task.id, requestId });
     if (!task.history.length) { task.title = question.trim().slice(0, 60); task.goal ||= question.trim(); }
     const turnGeneration = generation;
     const assertFresh = () => { if (controller.signal.aborted || generation !== turnGeneration) throw new Error('请求已取消或项目编辑状态变化'); };
     const round = startTurn(task, question);
+    round.intent = intent;
     task.draft = ''; task.updatedAt = Date.now();
     const sessionKey = JSON.stringify([SUGGESTION_POLICY_VERSION, task.id, task.root, provider, turnChoice.model, turnChoice.effort, task.webEnabled]);
     const continuous = task.threadMode === 'continuous' && !task.webEnabled;
@@ -356,7 +448,7 @@ exports.activate = async context => {
           if (task.focus.selected && document.getText().slice(task.focus.startOffset, task.focus.endOffset) !== task.focus.selected) {
             task.focus = { path: task.focus.path };
           }
-          snapshot = { ...task.focus, text: document.getText() };
+          snapshot = { ...task.focus, text: rememberText(document.uri.fsPath, document.getText()) };
         } catch {
           task.history.push({ role: '上下文', text: `关注文件无法读取，已取消关注：${task.focus.path}` });
           task.focus = null; sourceUri = null;
@@ -365,7 +457,7 @@ exports.activate = async context => {
       const buffers = [];
       for (const document of vscode.workspace.textDocuments) {
         if (document.uri.scheme === 'file' && inside(task.root, document.uri.fsPath) && document.isDirty) {
-          buffers.push({ path: document.uri.fsPath, text: document.getText(), dirty: true });
+          buffers.push({ path: document.uri.fsPath, text: rememberText(document.uri.fsPath, document.getText()), dirty: true });
         }
       }
       const latestPaths = new Set([task.focus?.path, ...(task.outcomes.at(-1)?.applied ?? []).map(file => resolve(task.root, file.path))]);
@@ -401,7 +493,7 @@ exports.activate = async context => {
           threadId = await startSuggestionSession(client, cwd, { ...turnChoice, webEnabled: task.webEnabled, persistent: continuous });
         }
       } else resumed = continuous;
-      const requestContext = buildContext(task, question, buffers, 24000, { continuous: resumed });
+      const requestContext = buildContext(task, question, buffers, 24000, { continuous: resumed, findingIds });
       const payload = JSON.parse(requestContext.prompt); payload.intent = intent;
       requestContext.prompt = JSON.stringify(payload);
       task.contextDetails = { ...requestContext.details, characters: requestContext.prompt.length, thread: resumed ? '复用 / 恢复' : '新建', threadId };
@@ -422,11 +514,15 @@ exports.activate = async context => {
       if (controller.signal.aborted) throw new Error('已取消');
       await assertBatchCurrent(nextBatch, readText);
       assertFresh();
-      const findingUpdate = { root: task.root, findings: structuredClone(task.findings) };
-      addFindings(findingUpdate, suggestion.findings);
+      const findingUpdate = { root: task.root, nextFindingNumber: task.nextFindingNumber, findings: structuredClone(task.findings) };
+      addFindings(findingUpdate, suggestion.findings, { turnId: round.id });
       await refreshFindingLocations(findingUpdate, { initialize: new Set(findingUpdate.findings.filter(item => !item.anchor && !item.locationStatus).map(item => item.id)) });
       assertFresh();
+      const nextReferences = references, nextBaseline = baseline, nextSnapshot = snapshot, nextSourceUri = sourceUri;
+      invalidate({ status: 'superseded' });
+      references = nextReferences; baseline = nextBaseline; snapshot = nextSnapshot; sourceUri = nextSourceUri;
       task.findings = findingUpdate.findings;
+      task.nextFindingNumber = findingUpdate.nextFindingNumber;
       batch = nextBatch;
       state.suggestion = { ...suggestion, provider, batchId: randomBytes(12).toString('hex'), changes: batchChanges(batch), requestedModel: turnChoice.model, effort: turnChoice.effort };
       state.suggestion.findingId = findingId;
@@ -435,11 +531,15 @@ exports.activate = async context => {
       if (suggestion.repairs) state.suggestion.repairs = suggestion.repairs;
       round.status = batch.length ? 'pendingReview' : 'completed'; round.batchId = state.suggestion.batchId;
       task.batches.push({ id: state.suggestion.batchId, turnId: round.id, summary: suggestion.summary, changes: batchChanges(batch), status: round.status });
-      task.checks = suggestion.checks.map(check => ({ ...check, batchId: state.suggestion.batchId, turnId: round.id }));
+      addChecks(task, suggestion.checks, { batchId: state.suggestion.batchId, turnId: round.id });
       state.history.push({ role: `AI · ${turnChoice.model} · ${turnChoice.effort ?? '默认强度'}`, text: `${suggestion.summary}\n\n${suggestion.explanation}\n\n验证说明：${suggestion.verification}` });
       if (batch.length) task.history.push({ role: '未应用候选', text: JSON.stringify(batchChanges(batch)) });
       state.status = '本轮完成，可继续追问。候选代码尚未应用。';
     } catch (error) {
+      if (generation === turnGeneration && state.suggestion === previousCandidate.suggestion) {
+        ({ batch, references, baseline, snapshot, sourceUri } = previousCandidate);
+        state.stale = previousCandidate.stale; drafts.clear(); for (const [key, value] of previousCandidate.drafts) drafts.set(key, value);
+      }
       state.status = controller.signal.aborted ? '本轮已取消；讨论保留，可直接重新提问。' : `失败：${explainConnectionError(error)}`;
       task.history.push({ role: '请求状态', text: state.status });
       round.status = controller.signal.aborted ? 'cancelled' : 'failed'; task.session = null;
@@ -488,7 +588,7 @@ exports.activate = async context => {
     previews.set(before.toString(), file.before);
     previews.set(after.toString(), file.after);
     previewDocuments = [before, after];
-    await vscode.commands.executeCommand('vscode.diff', before, after, `HumanFlow：${file.relativePath} 原始快照 ↔ 候选建议（只读，尚未应用）`, { preview: true });
+    await vscode.commands.executeCommand('vscode.diff', before, after, t`HumanFlow：${file.relativePath} 原始快照 ↔ 候选建议（只读，尚未应用）`, { preview: true });
   };
   const apply = async message => {
     if (busy || loadingModels || state.stale || !state.suggestion) return;
@@ -502,9 +602,11 @@ exports.activate = async context => {
       await check();
       const accepted = await applySelectedBatch(currentBatch, message.selection, {
         validate: async files => {
+          await assertBatchCurrent(files, readText); await assertBaseline(baseline, references);
+        },
+        validateSelection: async files => {
           const errors = budgetViolations(files, task.budget);
           if (errors.length) throw new Error('超出修改预算，请拆分或调整允许范围：' + errors.join('；'));
-          await assertBatchCurrent(files, readText); await assertBaseline(baseline, references);
         },
         commit: async selected => {
           const allDocs = await Promise.all(currentBatch.map(file => file.operation === 'create' ? null : vscode.workspace.openTextDocument(vscode.Uri.file(file.path))));
@@ -542,8 +644,8 @@ exports.activate = async context => {
       const round = task.turns.find(item => item.id === appliedTurnId);
       if (round) { round.status = outcome.notApplied.length ? 'partiallyApplied' : 'applied'; round.saved = !saved.failed.length; }
       const record = task.batches.find(item => item.id === appliedBatchId); if (record) record.status = round?.status ?? 'applied';
-      for (const validation of task.validations) validation.stale = true;
-      if (findingId) updateFinding(task, findingId, 'pendingVerification');
+      markValidationsStale(task, '应用候选后代码发生变化');
+      if (findingId) updateFinding(task, findingId, 'pendingVerification', { reason: saved.failed.length || outcome.notApplied.length ? '候选部分应用或保存未完成，需核对后验证' : '已应用候选，需验证并人工确认', source: 'application' });
       task.focus = task.focus ? { path: task.focus.path } : null; snapshot = null;
       state.history.push({ role: '应用记录', text: `已应用 ${accepted.reduce((n, file) => n + file.edits.length, 0)} 处修改：\n${accepted.map(file => file.relativePath).join('\n')}\n已保存：${saved.saved.join('、') || '无'}\n保存失败：${saved.failed.join('、') || '无'}\n未运行验证；可继续手动编辑。未选部分需重新生成。` });
       state.status = saved.failed.length ? `修改已应用，但以下文件保存失败：${saved.failed.join('、')}。请检查编辑器并手动保存。`
@@ -575,6 +677,9 @@ exports.activate = async context => {
     if (!draft || draft.batchId !== message.batchId || draft.document.isClosed) throw new Error('请先打开候选草稿');
     await assertBatchCurrent(current, readText); await assertBaseline(baseline, references);
     if (state.suggestion?.batchId !== message.batchId) throw new Error('草稿对应批次已变化');
+    if (!await confirmOperation('replaceCandidate', '采用草稿会替换该文件的候选片段并重置勾选与审查；业务文件尚不会修改。', '采用草稿')) return;
+    await assertBatchCurrent(current, readText); await assertBaseline(baseline, references);
+    if (state.suggestion?.batchId !== message.batchId || draft.document.isClosed) throw new Error('草稿对应批次已变化');
     const file = current[message.index], after = draft.document.getText();
     const otherSize = current.filter((_, index) => index !== message.index).reduce((sum, item) => sum + item.edits.reduce((n, edit) => n + edit.before.length + edit.after.length, 0), 0);
     if (otherSize + after.length + file.before.length > 100000) throw new Error('草稿使整批片段超过 100000 字符，请拆分任务');
@@ -587,18 +692,27 @@ exports.activate = async context => {
     const round = task.turns.find(item => item.id === state.suggestion.turnId); if (round) round.batchId = state.suggestion.batchId;
     drafts.clear(); state.status = '草稿已采用，该文件合并为一个可接受片段；请重新勾选和预览。'; publish();
   };
-  const validate = async index => {
-    if (busy || loadingModels || !task?.checks?.[index]) return;
+  const validate = async (index, checkId, validationId) => {
+    const latestChecks = (task?.checks ?? []).filter(item => item.batchId === task.latestCheckBatchId);
+    const previous = validationId && task?.validations.find(item => item.id === validationId);
+    if (validationId && (!previous || previous.cwd !== task.root)) throw new Error('历史验证不属于当前项目，无法重跑');
+    let check = previous ? task.checks.find(item => item.id === previous.checkId) : checkId ? task?.checks.find(item => item.id === checkId) : latestChecks[index];
+    if (previous) check = { ...check, command: previous.command, reason: '重新核对历史验证', findingIds: [...(previous.findingIds ?? [])], batchId: previous.batchId, turnId: previous.turnId };
+    if (busy || loadingModels || !check) return;
+    if (!check.id) { check.id = randomBytes(12).toString('hex'); check.revision = 0; task.checks.push(check); }
     busy = true; publish();
     try {
-      const check = task.checks[index], revision = generation;
+      const revision = generation;
       const paths = [...task.tracked, ...batch.map(file => file.path), ...references];
       const versions = await captureVersions(paths, readText);
       const dirty = vscode.workspace.textDocuments.some(doc => doc.isDirty && doc.uri.scheme === 'file' && inside(task.root, doc.uri.fsPath));
-      const result = await runValidation(vscode, task.root, task.checks[index], execution => { validationExecution = execution; });
+      const result = await runValidation(vscode, task.root, check, execution => { validationExecution = execution; }, t);
       if (result) {
         const after = await captureVersions(paths, readText);
-        task.validations.push({ ...result, id: randomBytes(12).toString('hex'), batchId: check.batchId, turnId: check.turnId, versions, stale: dirty || generation !== revision || JSON.stringify(versions) !== JSON.stringify(after), coverage: '关联文件；不证明整个项目未变化' });
+        const stale = dirty || generation !== revision || JSON.stringify(versions) !== JSON.stringify(after);
+        task.validations.push({ ...result, id: randomBytes(12).toString('hex'), revision: 0, checkId: check.id, findingIds: [...check.findingIds],
+          batchId: check.batchId, turnId: check.turnId, versions, stale,
+          staleReason: stale ? '存在未保存内容或验证期间代码变化' : undefined, coverage: '关联文件；不证明整个项目未变化' });
         task.history.push({ role: '运行验证', text: JSON.stringify(result) + '\n完整输出见验证任务终端；退出码不等于语义正确。' });
         state.status = result.exitCode === 0 ? '验证命令退出码为 0，结果已记录。' : '验证失败或中断，结果已记录；不会自动修复。';
       }
@@ -648,7 +762,8 @@ exports.activate = async context => {
       let changed = false;
       for (const item of tasks) if (inside(item.root, uri.fsPath)) {
         void refreshFindingLocations(item, { path: uri.fsPath }).then(() => publish());
-        for (const validation of item.validations) if (!validation.stale) { validation.stale = true; changed = true; }
+        if (item.validations.some(validation => !validation.stale)) changed = true;
+        markValidationsStale(item, '项目文件在磁盘发生变化');
       }
       if (task && inside(task.root, uri.fsPath) && validationExecution) generation++;
       if (changed) publish();
@@ -656,6 +771,11 @@ exports.activate = async context => {
     context.subscriptions.push(watcher, watcher.onDidChange(changedOnDisk), watcher.onDidCreate(changedOnDisk), watcher.onDidDelete(changedOnDisk));
   }
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
+    if (event.document.uri.scheme === 'file' && event.contentChanges.length) {
+      const path = event.document.uri.fsPath, version = contentVersion(event.document.getText());
+      if (knownVersions.get(path) === version) return;
+      knownVersions.set(path, version);
+    }
     if (event.document.uri.scheme === 'file' && event.contentChanges.length) {
       for (const owner of tasks) for (const finding of owner.findings ?? []) {
         if (samePath(resolve(owner.root, finding.path), event.document.uri.fsPath)) locateFinding(finding, event.document.getText());
@@ -665,25 +785,47 @@ exports.activate = async context => {
     }
     if (applying || !task || event.document.uri.scheme !== 'file' || !inside(task.root, event.document.uri.fsPath) || !event.contentChanges.length) return;
     generation++;
-    for (const validation of task.validations ?? []) validation.stale = true;
+    markValidationsStale(task, '编辑器内容发生变化');
     const path = event.document.uri.fsPath;
     const relevant = samePath(task.focus?.path, path) || batch.some(file => samePath(file.path, path)) || references.some(item => samePath(item, path)) || task.tracked.some(item => samePath(item, path));
     if (samePath(task.focus?.path, path)) { task.focus = { path }; snapshot = null; }
     if (relevant) {
-      task.tracked = [...new Set([...task.tracked, path])]; invalidate();
-      state.status = '代码已变化，旧候选已失效；讨论保留，下轮同步最新代码。';
+      task.tracked = [...new Set([...task.tracked, path])]; markCandidateStale();
+      state.status = '代码已变化，候选原文保留为只读记录；下轮同步最新代码。';
     }
     if (busy && !validationExecution) { controller?.abort(); state.status = '项目文件在生成期间发生编辑，本轮已取消；可直接重新提问。'; }
     publish();
   }));
   const dispatch = async message => {
     if (!vscode.workspace.isTrusted) return;
-    const navigation = ['newTask', 'restoreTask', 'deleteTask', 'bind', 'provider'].includes(message.type);
-    if (navigating && message.type !== 'cancel' && message.type !== 'ready') return;
+    const navigation = ['newTask', 'restoreTask', 'deleteTask', 'bind', 'selectFocusFile', 'provider'].includes(message.type);
+    if (((confirmations.pending || closingPanel) && !['confirmationResult', 'ready', 'draft', 'uiState', 'uiLanguage'].includes(message.type))
+      || (navigating && !['cancel', 'ready', 'confirmationResult', 'draft', 'uiState', 'uiLanguage'].includes(message.type))) {
+      if (message.type === 'ask') panel?.webview.postMessage({ type: 'requestRejected', taskId: message.taskId ?? task?.id, requestId: message.requestId });
+      return;
+    }
     if (navigation) { if (busy || loadingModels) return; navigating = true; publish(); }
     try {
       if (message.taskId && message.taskId !== task?.id) throw new Error('操作属于其他任务，已忽略');
-      if (message.type === 'ready') publish(true);
+      if (message.type === 'ready') { publish(true); confirmations.announce(); }
+      else if (message.type === 'confirmationResult') await confirmations.respond(message);
+      else if (message.type === 'closePanel') await closePanel();
+      else if (message.type === 'resetConfirmations') { await confirmations.reset(); state.status = '操作确认提示已恢复。'; publish(); }
+      else if (message.type === 'discardCandidate') {
+        if (busy || loadingModels || !hasCandidate() || message.batchId !== state.suggestion?.batchId) return;
+        if (!await confirmOperation('discardCandidate', '清除当前候选和采用中的草稿引用？历史记录保留，业务文件不会被修改。', '清除候选')) return;
+        invalidate({ status: 'superseded' }); state.status = '当前候选已清除；历史记录仍保留。'; publish();
+      }
+      else if (message.type === 'openSettings') await vscode.commands.executeCommand('humanflow.openSettings');
+      else if (message.type === 'openUserSettings') await vscode.commands.executeCommand('humanflow.openUserSettings');
+      else if (message.type === 'openWorkspaceSettings') await vscode.commands.executeCommand('humanflow.openWorkspaceSettings');
+      else if (message.type === 'uiLanguage') {
+        if (!['zh-CN', 'en'].includes(message.language)) return;
+        await context.globalState?.update('humanflow.uiLanguage', message.language);
+        uiLanguage = message.language;
+        uiI18n.setLanguage(uiLanguage);
+        publish(true);
+      }
       else if (message.type === 'taskSettings') {
         if (busy || loadingModels || !task) return;
         if (typeof message.goal !== 'string' || message.goal.length > 12000) throw new Error('目标过长');
@@ -700,7 +842,11 @@ exports.activate = async context => {
       }
       else if (message.type === 'decision') {
         if (busy || !task) return;
-        if (message.remove) task.decisions = task.decisions.filter(item => item.id !== message.remove);
+        if (message.remove) {
+          if (!task.decisions.some(item => item.id === message.remove)) return;
+          if (!await confirmOperation('deleteContent', '取消固定会删除这条任务决策；讨论历史和业务文件仍保留。', '取消固定')) return;
+          task.decisions = task.decisions.filter(item => item.id !== message.remove);
+        }
         else {
           if (typeof message.text !== 'string' || !message.text.trim() || message.text.length > 4000 || (!message.editId && task.decisions.length >= 50)) throw new Error('决策为空、过长或超过 50 条');
           if (message.turnId && !task.turns.some(item => item.id === message.turnId)) throw new Error('来源轮次不存在');
@@ -716,7 +862,9 @@ exports.activate = async context => {
       else if (message.type === 'compact') {
         if (busy || !client || !threadId || task?.threadMode !== 'continuous') throw new Error('先在持续线程模式完成一轮讨论');
         busy = true; controller = new AbortController(); state.status = '请求 Harness 压缩……'; publish();
-        try { await compactThread(client, threadId, { signal: controller.signal }); state.status = 'Harness 已返回压缩完成事件。'; }
+        const timeouts = timeoutSettings();
+        client.modelRequestTimeoutMs = timeouts.modelRequestTimeoutMs;
+        try { await compactThread(client, threadId, { signal: controller.signal, timeoutMs: timeouts.compactionTimeoutMs }); state.status = 'Harness 已返回压缩完成事件。'; }
         catch (error) { task.session = null; await resetClient(); state.status = error.message; }
         finally { busy = false; publish(); }
       }
@@ -735,7 +883,7 @@ exports.activate = async context => {
         const after = before.with({ path: before.path.replace('/before/', '/after/') });
         previews.set(before.toString(), file.before); previews.set(after.toString(), file.after);
         previewDocuments = [before, after];
-        await vscode.commands.executeCommand('vscode.diff', before, after, `HumanFlow：${file.relativePath} 应用前 ↔ 应用记录（不代表当前代码）`, { preview: true });
+        await vscode.commands.executeCommand('vscode.diff', before, after, t`HumanFlow：${file.relativePath} 应用前 ↔ 应用记录（不代表当前代码）`, { preview: true });
       }
       else if (message.type === 'webEnabled') {
         if (busy || loadingModels || !task) return;
@@ -755,7 +903,9 @@ exports.activate = async context => {
       else if (message.type === 'provider') {
         if (busy || loadingModels) throw new Error('请等待当前操作完成后切换提供方');
         if (!['codex', 'deepseek'].includes(message.provider)) throw new Error('不支持的提供方');
-        await resetClient(); provider = message.provider; choice = {}; models = []; invalidate();
+        if (provider === message.provider) return;
+        if (!await confirmCandidateChange('切换模型服务会使当前候选失效；候选原文会保留供查看。')) return;
+        await resetClient(); provider = message.provider; choice = {}; models = []; markCandidateStale();
         state.status = '提供方已切换；下一轮会向所选服务发送本任务历史与项目上下文。'; publish();
         await refreshModels();
       }
@@ -768,20 +918,46 @@ exports.activate = async context => {
         publish();
       }
       else if (message.type === 'bind') await bind();
+      else if (message.type === 'selectFocusFile') await bind(true);
       else if (message.type === 'newTask') await newTask();
       else if (message.type === 'restoreTask') await switchTask();
       else if (message.type === 'deleteTask') await deleteTask();
       else if (message.type === 'editDraft') await editDraft(message);
       else if (message.type === 'useDraft') await useDraft(message);
-      else if (message.type === 'validate') await validate(message.index);
+      else if (message.type === 'validate') await validate(message.index, message.checkId, message.validationId);
       else if (message.type === 'review') await review(message);
       else if (message.type === 'findingStatus') {
         if (busy || loadingModels) return;
-        updateFinding(task, message.id, message.status); publish();
+        transitionFindings(task, { taskId: message.taskId, updates: [{ id: message.id, revision: message.revision, status: message.status }] }); publish();
+      }
+      else if (message.type === 'findingTransition') {
+        if (busy || loadingModels) return;
+        busy = true; publish();
+        try {
+        // 有效验证依据在提交前再次核对，磁盘事件尚未送达时也不误用旧结果。
+        const ids = new Set((message.updates ?? []).flatMap(update => update.validationIds ?? []));
+        for (const record of task.validations.filter(item => ids.has(item.id))) {
+          const current = await captureVersions(Object.keys(record.versions ?? {}), readText);
+          const dirty = vscode.workspace.textDocuments.some(doc => doc.isDirty && doc.uri.scheme === 'file' && inside(task.root, doc.uri.fsPath));
+          if (dirty || JSON.stringify(current) !== JSON.stringify(record.versions)) {
+            record.stale = true; record.staleReason = '确认解决前代码版本变化或存在未保存内容'; record.revision++;
+          }
+        }
+        const changed = transitionFindings(task, message);
+        state.status = '问题处理记录已保存。';
+        publish();
+        panel?.webview.postMessage({ type: 'findingTransitionComplete', taskId: task.id, requestId: message.requestId,
+          records: changed.map(item => ({ id: item.id, revision: item.revision, status: item.status, event: item.statusHistory.at(-1) })) });
+        } finally { busy = false; publish(); }
+      }
+      else if (message.type === 'findingEvidence') {
+        if (busy || loadingModels || message.taskId !== task?.id) return;
+        linkFindingEvidence(task, message); state.status = '问题与验证的关联已保存。'; publish();
       }
       else if (message.type === 'fixFinding') {
         const finding = task?.findings.find(item => item.id === message.id);
         if (!finding) throw new Error('问题不存在');
+        if (isClosedFinding(finding)) throw new Error('请先重新打开问题，再提出修复候选');
         await ask('只处理选中问题，检查相关定义、调用方和测试，提出同一意图的候选批次。其他问题暂不修改。', finding.id, 'discuss', [finding.id]);
       }
       else if (message.type === 'openFinding') {
@@ -802,16 +978,18 @@ exports.activate = async context => {
         const line = Math.max(0, Math.min(doc.lineCount - 1, Number(match[2] ?? match[3] ?? 1) - 1));
         await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preview: true, selection: new vscode.Range(line, 0, line, 0) });
       }
-      else if (message.type === 'ask') await ask(message.question, undefined, ['explain', 'inspect'].includes(message.intent) ? message.intent : 'discuss', message.findingIds ?? []);
+      else if (message.type === 'ask') await ask(message.question, undefined, ['explain', 'inspect'].includes(message.intent) ? message.intent : 'discuss', message.findingIds ?? [], message.requestId);
       else if (message.type === 'cancel') { controller?.abort(); validationExecution?.terminate(); }
       else if (message.type === 'preview') await preview(message.index, message.selection, message.batchId, message.mode === 'unified' ? 'unified' : 'diff');
       else if (message.type === 'apply') await apply(message);
-    } catch (error) { state.status = error.message; publish(); }
+    } catch (error) {
+      if (message.type === 'ask') panel?.webview.postMessage({ type: 'requestRejected', taskId: task?.id, requestId: message.requestId });
+      state.status = error.message; publish();
+    }
     finally { if (navigation) { navigating = false; publish(); } }
   };
 
-  context.subscriptions.push(vscode.commands.registerCommand('humanflow.open', async () => {
-    if (!vscode.workspace.isTrusted) return;
+  const ensurePanel = () => {
     if (!panel) {
       panel = vscode.window.createWebviewPanel('humanflow', 'HumanFlow', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }, {
         enableScripts: true, retainContextWhenHidden: true,
@@ -824,30 +1002,70 @@ exports.activate = async context => {
       // UI 设计系统（media/ui）：Token、组件与状态语义由素材库提供，面板只引用入口文件。
       const uiStyle = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/ui/HumanFlow_UI_Asset_Library_V2/humanflow-ui.css'));
       panel.webview.html = readFileSync(join(context.extensionPath, 'media/panel.html'), 'utf8')
+        .replace('<html lang="zh-CN">', `<html lang="${uiLanguage}">`)
         .replaceAll('{{nonce}}', nonce).replaceAll('{{csp}}', panel.webview.cspSource)
+        .replace('{{i18n}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/i18n.js')).toString())
+        .replace('{{confirmation}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/confirmation.js')).toString())
+        .replace('{{findings}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/findings.js')).toString())
         .replace('{{workspace}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/workspace.js')).toString())
         .replace('{{uiStyle}}', uiStyle.toString())
         .replace('{{script}}', script.toString()).replace('{{style}}', style.toString()).replace('{{markdown}}', markdown.toString());
       panel.webview.onDidReceiveMessage(dispatch, null, context.subscriptions);
-      panel.onDidDispose(() => { controller?.abort(); panel = null; void resetClient(); });
-    } else panel.reveal(vscode.ViewColumn.Beside, true);
+      const created = panel;
+      created.onDidDispose(() => {
+        if (panel !== created) return;
+        panel = null;
+        if (shuttingDown || closingPanel) return;
+        confirmations.cancel();
+        void closePanel(true).catch(error => { state.status = error.message; publish(); });
+      });
+    }
+    return panel;
+  };
+  const revealPanel = () => { const current = ensurePanel(); current.reveal(current.viewColumn ?? vscode.ViewColumn.Beside, true); };
+  const closePanel = async (native = false) => {
+    if (shuttingDown || closingPanel) return;
+    if (applying) { revealPanel(); state.status = '正在应用修改，请等待完成后关闭。'; publish(); return; }
+    if (!await confirmOperation('closePanel', '关闭面板会停止当前模型请求和验证；候选、草稿与讨论仍保留，可重新打开继续。', '关闭面板')) {
+      if (native && !shuttingDown) revealPanel();
+      publish(true); return;
+    }
+    if (shuttingDown) return;
+    closingPanel = true;
+    try {
+      stashCandidate(); controller?.abort(); validationExecution?.terminate();
+      panel?.dispose(); panel = null; await resetClient(); publish(); await storageQueue;
+    } finally { closingPanel = false; publish(); }
+  };
+  context.subscriptions.push(vscode.commands.registerCommand('humanflow.open', async () => {
+    if (!vscode.workspace.isTrusted || shuttingDown) return;
+    revealPanel();
     try {
       if (!task) await newTask();
       if (task) await refreshFindingLocations(task);
       const editor = vscode.window.activeTextEditor;
-      if (editor?.document.uri.scheme === 'file' && !editor.selection.isEmpty) await bind();
+      if (task && !task.focus && !task.turns.length && !hasCandidate() && editor?.document.uri.scheme === 'file' && !editor.selection.isEmpty) await bind();
       else publish();
     } catch (error) { state.status = error.message; publish(); }
     if (!models.length) await refreshModels();
   }));
+  context.subscriptions.push(vscode.commands.registerCommand('humanflow.resetConfirmations', async () => {
+    await confirmations.reset(); state.status = '操作确认提示已恢复。'; publish();
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand('humanflow.openSettings', () =>
+    vscode.commands.executeCommand('workbench.action.openSettings', '@ext:windflowing.humanflow')));
+  context.subscriptions.push(vscode.commands.registerCommand('humanflow.openUserSettings', () =>
+    vscode.commands.executeCommand('workbench.action.openSettingsJson')));
+  context.subscriptions.push(vscode.commands.registerCommand('humanflow.openWorkspaceSettings', () =>
+    vscode.commands.executeCommand('workbench.action.openWorkspaceSettingsFile')));
   context.subscriptions.push(vscode.commands.registerCommand('humanflow.showFailedResponse', async () => {
-    if (failedResponse === undefined) return vscode.window.showInformationMessage('当前窗口没有保留的失败响应；请在更新后重新发起一次请求。');
+    if (failedResponse === undefined) return vscode.window.showInformationMessage(t('当前窗口没有保留的失败响应；请在更新后重新发起一次请求。'));
     const doc = await vscode.workspace.openTextDocument({ content: failedResponse, language: 'plaintext' });
     await vscode.window.showTextDocument(doc, { preview: false });
   }));
   context.subscriptions.push(vscode.commands.registerCommand('humanflow.setTavilyApiKey', async () => {
     if (busy || loadingModels) return;
-    const key = await vscode.window.showInputBox({ title: 'Tavily Search API Key', prompt: '存入 VS Code SecretStorage；搜索会使用 Tavily 账户额度。', password: true, ignoreFocusOut: true });
+    const key = await vscode.window.showInputBox({ title: 'Tavily Search API Key', prompt: t('存入 VS Code SecretStorage；搜索会使用 Tavily 账户额度。'), password: true, ignoreFocusOut: true });
     if (!key?.trim()) return;
     if (/[\r\n]/.test(key)) throw new Error('API Key 格式无效');
     await context.secrets.store('humanflow.tavily.apiKey', key.trim());
@@ -860,7 +1078,7 @@ exports.activate = async context => {
   }));
   context.subscriptions.push(vscode.commands.registerCommand('humanflow.setDeepSeekApiKey', async () => {
     if (busy || loadingModels) throw new Error('请等待当前操作完成');
-    const key = await vscode.window.showInputBox({ title: 'DeepSeek 官方 API Key', prompt: '仅存入 VS Code SecretStorage，不写入项目、Codex 配置或任务记录。', password: true, ignoreFocusOut: true });
+    const key = await vscode.window.showInputBox({ title: t('DeepSeek 官方 API Key'), prompt: t('仅存入 VS Code SecretStorage，不写入项目、Codex 配置或任务记录。'), password: true, ignoreFocusOut: true });
     if (!key?.trim()) return;
     await context.secrets.store('humanflow.deepseek.apiKey', key.trim());
     if (provider === 'deepseek') { await resetClient(); if (task) task.session = null; }
@@ -872,8 +1090,8 @@ exports.activate = async context => {
     if (provider === 'deepseek') { await resetClient(); if (task) task.session = null; }
     state.status = '已删除 HumanFlow 保存的 DeepSeek Key；若存在 DEEPSEEK_API_KEY 环境变量，仍会使用它。'; publish();
   }));
-  context.subscriptions.push({ dispose() { controller?.abort(); panel?.dispose(); void resetClient(); } });
-  shutdown = async () => { controller?.abort(); await resetClient(); await storageQueue; };
+  context.subscriptions.push({ dispose() { shuttingDown = true; confirmations.cancel(); controller?.abort(); panel?.dispose(); void resetClient(); } });
+  shutdown = async () => { shuttingDown = true; confirmations.cancel(); controller?.abort(); await resetClient(); await storageQueue; };
   // 与面板共用动作入口，供扩展宿主集成测试调用；不提供绕过模型的候选注入。
-  return { dispatch, snapshot: () => structuredClone({ ...state, busy, task }), flush: () => storageQueue };
+  return { dispatch, snapshot: () => structuredClone({ ...state, uiLanguage, busy, navigating, closingPanel, loadingModels, task, confirmation: confirmations.pending }), flush: () => storageQueue };
 };

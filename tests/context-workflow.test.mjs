@@ -81,3 +81,16 @@ test('Harness 用量与压缩只认本线程实际事件；压缩失败、取消
   await assert.rejects(compactThread(client, 't', { signal: controller.signal }), /取消/);
   assert.equal(client.listenerCount('notification'), 0);
 });
+
+test('模型压缩的默认等待也放宽为 30 分钟', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const client = new EventEmitter();
+  client.request = async () => {};
+  const pending = compactThread(client, 't');
+  const rejected = assert.rejects(pending, /压缩超时/);
+  t.mock.timers.tick(180000);
+  assert.equal(client.listenerCount('notification'), 1);
+  t.mock.timers.tick(1620000);
+  await rejected;
+  assert.equal(client.listenerCount('notification'), 0);
+});

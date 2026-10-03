@@ -1,6 +1,13 @@
 const vscode = acquireVsCodeApi();
 const get = id => document.getElementById(id);
-const workspace = createWorkspace(vscode);
+const i18n = createHumanflowI18n(document.documentElement.lang);
+const t = i18n.t;
+const localizeStatic = i18n.bindStatic(document);
+localizeStatic();
+const workspace = createWorkspace(vscode, i18n);
+const confirmationView = createConfirmationView({ document, vscode, workspace, i18n });
+let pendingSubmission, submissionSequence = 0;
+let lastSnapshot, lastProgress, pendingLanguage;
 let roundStates = [], historyWindow = 20, currentHistory = [], filesSignature;
 get('web-enabled').onchange = () => vscode.postMessage({ type: 'webEnabled', enabled: get('web-enabled').checked });
 get('web-provider').onchange = () => vscode.postMessage({ type: 'webSearchProvider', provider: get('web-provider').value });
@@ -36,7 +43,7 @@ const emptyState = (art, title, body) => {
 };
 const note = (text, className = 'hint') => { const node = document.createElement('p'); node.className = className; node.textContent = text; return node; };
 // 面板脚本每次打开面板都从磁盘读取，可能比正在运行的扩展宿主更新；协议号不一致时明确提示，避免静默走旧行为。
-const PANEL_PROTOCOL = 3;
+const PANEL_PROTOCOL = 7;
 let hostProtocol, protocolMismatch = true;
 const protocolWarning = note('', 'panel-alert'); protocolWarning.id = 'protocol-warning'; protocolWarning.hidden = true;
 get('status').before(protocolWarning);
@@ -78,7 +85,7 @@ const renderHistoryEntry = entry => {
     : renderMarkdown(entry.text, document, path => vscode.postMessage({ type: 'openFile', path }), url => vscode.postMessage({ type: 'openExternal', url }));
   if (entry.role === '未应用候选') body.textContent = entry.text;
   const label = document.createElement(primary ? 'strong' : 'summary');
-  label.textContent = entry.role === '未应用候选' ? '历史候选（不代表已应用，展开查看）' : entry.role;
+  label.textContent = entry.role === '未应用候选' ? t('历史候选（不代表已应用，展开查看）') : t(entry.role);
   if (primary) article.append(label, body);
   else {
     const details = document.createElement('details'); details.className = 'entry-details';
@@ -89,14 +96,14 @@ const renderHistoryEntry = entry => {
 };
 const renderHistory = (history, taskId) => {
   currentHistory = history;
-  const signature = JSON.stringify([history, roundStates, historyWindow]);
+  const signature = JSON.stringify([i18n.language, history, roundStates, historyWindow]);
   if (taskId === historyTaskId && signature === historySignature) return;
   if (taskId !== historyTaskId) { rounds = []; get('history').replaceChildren(); }
   historyTaskId = taskId; historySignature = signature;
   if (!rounds.length) get('history').replaceChildren();
   const groups = [];
   for (const entry of history) {
-    if (entry.role === '你' || !groups.length) groups.push({ id: entry.turnId, title: entry.role === '你' ? entry.text : '任务记录', entries: [] });
+    if (entry.role === '你' || !groups.length) groups.push({ id: entry.turnId, title: entry.role === '你' ? entry.text : t('任务记录'), entries: [] });
     groups.at(-1).entries.push(entry);
   }
   rounds = groups.map((group, index) => {
@@ -109,9 +116,9 @@ const renderHistory = (history, taskId) => {
     }
     const title = group.title.replace(/\s+/g, ' ').trim();
     const status = roundStates.find(item => item.id === group.id);
-    round.summary.textContent = `${index + 1}. ${title.slice(0, 100)}${title.length > 100 ? '…' : ''} · ${workspace.labels[status?.status] ?? '记录'}${status?.saved === true ? ' · 已保存' : status?.saved === false ? ' · 保存未完成' : ''}`;
+    round.summary.textContent = `${index + 1}. ${title.slice(0, 100)}${title.length > 100 ? '…' : ''} · ${workspace.labels[status?.status] ?? t('记录')}${status?.saved === true ? t(' · 已保存') : status?.saved === false ? t(' · 保存未完成') : ''}`;
     // 复用已有消息节点，保留内层折叠状态、选中文本和阅读位置。
-    const signatures = group.entries.map(entry => JSON.stringify(entry));
+    const signatures = group.entries.map(entry => JSON.stringify([i18n.language, entry]));
     if (round.entries.some((entry, i) => entry !== signatures[i])) { round.body.replaceChildren(); round.entries = []; }
     const mount = () => {
       for (let i = round.entries.length; i < group.entries.length; i++) round.body.append(renderHistoryEntry(group.entries[i]));
@@ -131,7 +138,7 @@ const renderHistory = (history, taskId) => {
     button.dataset.target = round.node.id; button.onclick = () => jumpToRound(round.node); return button;
   }));
   markRound(activeId ?? rounds.at(-1)?.node.id);
-  if (!rounds.length) get('history').replaceChildren(emptyState('empty-task', '从一个问题开始。', '在下方描述需求；讨论、问题与候选修改都会归到当前任务。'));
+  if (!rounds.length) get('history').replaceChildren(emptyState('empty-task', t('从一个问题开始。'), t('在下方描述需求；讨论、问题与候选修改都会归到当前任务。')));
   get('load-history').hidden = historyWindow >= groups.length;
 };
 get('load-history').onclick = () => { historyWindow += 20; renderHistory(currentHistory, historyTaskId); };
@@ -141,12 +148,12 @@ get('load-history').onclick = () => { historyWindow += 20; renderHistory(current
 const normalizedNote = note(''); normalizedNote.id = 'batch-normalized'; normalizedNote.hidden = true; get('budget-errors').before(normalizedNote);
 const renderReview = () => {
   get('review-result').textContent = !reviewRecord ? '' : JSON.stringify(reviewRecord.selection) !== JSON.stringify(selection)
-    ? '勾选项已变化；上次审查不适用于当前选择，请重新审查。' : `${reviewRecord.model} · ${reviewRecord.effort ?? '默认'}\n${reviewRecord.text}`;
+    ? t('勾选项已变化；上次审查不适用于当前选择，请重新审查。') : `${reviewRecord.model} · ${reviewRecord.effort ?? t('默认')}\n${reviewRecord.text}`;
 };
 const setReviewEfforts = () => {
   const item = reviewModels.find(item => item.model === get('review-model').value);
   get('review-effort').replaceChildren(...(item?.efforts?.length ? item.efforts : ['']).map(value => {
-    const option = document.createElement('option'); option.value = value; option.textContent = value || '默认'; return option;
+    const option = document.createElement('option'); option.value = value; option.textContent = value || t('默认'); return option;
   }));
   if (item?.efforts.includes('low')) get('review-effort').value = 'low';
 };
@@ -157,10 +164,11 @@ get('review-bar').before(applyHint);
 const updateApply = () => {
   const hasSelection = selection.some(items => items.length);
   get('apply').disabled = locked || !hasSelection || !get('dependencies').checked;
-  applyHint.textContent = locked ? '当前批次暂不可应用，请查看上方状态。' : !hasSelection ? '先勾选要接受的片段，再预览修改。'
-    : !get('dependencies').checked ? '请先在批次说明中确认已检查关联依赖。' : '已准备好：仅应用并保存勾选的修改。';
+  applyHint.textContent = locked ? t('当前批次暂不可应用，请查看上方状态。') : !hasSelection ? t('先勾选要接受的片段，再预览修改。')
+    : !get('dependencies').checked ? t('请先在批次说明中确认已检查关联依赖。') : t('已准备好：仅应用并保存勾选的修改。');
 };
-get('dependencies').onchange = updateApply;
+const saveCandidateUI = () => workspace.setUI('candidate', { batchId: currentBatchId, selection, dependencies: get('dependencies').checked, fileIndex });
+get('dependencies').onchange = () => { saveCandidateUI(); updateApply(); };
 get('apply').onclick = () => {
   if (get('apply').disabled) return;
   get('apply').disabled = true;
@@ -171,19 +179,19 @@ get('clear-selection').onclick = () => {
   selection = currentChanges.map(() => []);
   get('dependencies').checked = false;
   for (const box of get('files').querySelectorAll('input[type="checkbox"]')) box.checked = false;
-  updateSelectionState();
+  saveCandidateUI(); updateSelectionState();
 };
 const fileSelectionState = index => {
   const total = currentChanges[index]?.edits?.length ?? 0;
   const picked = selection[index]?.length ?? 0;
-  if (!total) return ['无候选片段', 'ignored'];
-  if (!picked) return ['未勾选', 'unreviewed'];
-  return picked >= total ? [`已勾选全部 ${total} 处`, 'confirmed'] : [`已勾选 ${picked}/${total} 处`, 'proposed'];
+  if (!total) return [t('无候选片段'), 'ignored'];
+  if (!picked) return [t('未勾选'), 'unreviewed'];
+  return picked >= total ? [t`已勾选全部 ${total} 处`, 'confirmed'] : [t`已勾选 ${picked}/${total} 处`, 'proposed'];
 };
 const updateSelectionState = () => {
   const total = currentChanges.reduce((sum, file) => sum + (file.edits?.length ?? 0), 0);
   const picked = selection.reduce((sum, list) => sum + list.length, 0);
-  get('review-bar-count').textContent = `已勾选 ${picked} / ${total} 处片段`;
+  get('review-bar-count').textContent = t`已勾选 ${picked} / ${total} 处片段`;
   if (selectionMetric) selectionMetric.textContent = String(picked);
   fileChips.forEach((node, index) => { if (node) { const [text, tone] = fileSelectionState(index); setChip(node, text, tone); } });
   updateApply();
@@ -191,7 +199,7 @@ const updateSelectionState = () => {
 };
 const focusFile = index => {
   if (!currentChanges.length) return;
-  fileIndex = (index + currentChanges.length) % currentChanges.length;
+  fileIndex = (index + currentChanges.length) % currentChanges.length; saveCandidateUI();
   get('file-position').textContent = `${fileIndex + 1} / ${currentChanges.length}`;
   const nodes = get('files').children;
   for (const node of nodes) node.classList.remove('is-current');
@@ -209,7 +217,7 @@ const renderHunk = (edit, index) => {
   const lines = text => text === '' ? [] : String(text).replace(/\n$/, '').split('\n');
   const before = lines(edit.before ?? ''), after = lines(edit.after ?? '');
   const head = document.createElement('div'); head.className = 'hf-hunk__head';
-  head.textContent = `第 ${index + 1} 处候选片段 · 替换前 ${before.length} 行 · 替换后 ${after.length} 行`;
+  head.textContent = t`第 ${index + 1} 处候选片段 · 替换前 ${before.length} 行 · 替换后 ${after.length} 行`;
   const line = (kind, text) => {
     const row = document.createElement('div'), mark = document.createElement('span'), code = document.createElement('span');
     row.className = `hf-hunk__line hf-hunk__line--${kind}`;
@@ -227,14 +235,14 @@ const renderBatch = data => {
   const suggestion = data.suggestion, stats = suggestion?.stats ?? {};
   const changes = suggestion?.changes ?? [];
   currentChanges = changes;
-  const disabled = data.busy || data.stale;
+  const disabled = data.busy || data.loadingModels || data.stale || protocolMismatch;
   get('batch-model').textContent = suggestion
-    ? `本批服务：${suggestion.provider ?? 'codex'} · ${suggestion.requestedModel}${suggestion.effort ? ` · ${suggestion.effort}` : ''}`
+    ? t`本批服务：${suggestion.provider ?? 'codex'} · ${suggestion.requestedModel}${suggestion.effort ? ` · ${suggestion.effort}` : ''}`
     : '';
   const metrics = [
-    [String(changes.length), '个文件'],
-    [`+${stats.added ?? 0} / −${stats.removed ?? 0}`, '替换行数'],
-    [String(selection.reduce((sum, list) => sum + list.length, 0)), '已勾选片段']
+    [String(changes.length), t('个文件')],
+    [`+${stats.added ?? 0} / −${stats.removed ?? 0}`, t('替换行数')],
+    [String(selection.reduce((sum, list) => sum + list.length, 0)), t('已勾选片段')]
   ];
   selectionMetric = undefined;
   get('batch-summary').replaceChildren(...metrics.map(([value, label]) => {
@@ -242,26 +250,28 @@ const renderBatch = data => {
     cell.className = 'hf-change-summary__metric';
     strong.className = 'hf-change-summary__value';
     strong.textContent = value;
-    if (label === '替换行数') {
+    if (label === t('替换行数')) {
       strong.replaceChildren();
       const added = document.createElement('span'), removed = document.createElement('span');
       added.className = 'hf-delta-add'; added.textContent = `+${stats.added ?? 0}`;
       removed.className = 'hf-delta-remove'; removed.textContent = `−${stats.removed ?? 0}`;
       strong.append(added, document.createTextNode(' / '), removed);
     }
-    if (label === '已勾选片段') selectionMetric = strong;
+    if (label === t('已勾选片段')) selectionMetric = strong;
     small.className = 'hf-change-summary__label'; small.textContent = label;
     cell.append(strong, small); return cell;
   }));
-  get('budget-errors').textContent = (suggestion?.budgetErrors ?? []).join('；');
+  const budgetErrors = (suggestion?.budgetErrors ?? []).map(i18n.systemText).join('；');
+  get('budget-errors').textContent = budgetErrors ? t`整批候选范围提示（应用时仅校验勾选项）：${budgetErrors}` : '';
   const repairs = suggestion?.repairs ?? 0;
   normalizedNote.hidden = !repairs;
-  if (repairs) normalizedNote.textContent = `本批响应含 ${repairs} 处非法 JSON 转义（例如路径写成 \\_），已在路径与文字字段按原意规范化；候选代码原文未被改写。`;
+  if (repairs) normalizedNote.textContent = t`本批响应含 ${repairs} 处非法 JSON 转义（例如路径写成 \\_），已在路径与文字字段按原意规范化；候选代码原文未被改写。`;
   get('dependency-notes').replaceChildren(...(suggestion?.dependencies ?? []).map(text => note(text)));
-  const nextSignature = JSON.stringify([changes, currentBatchId, locked]);
+  const nextSignature = JSON.stringify([i18n.language, changes, currentBatchId, locked]);
   if (filesSignature === nextSignature) { updateSelectionState(); return; }
   filesSignature = nextSignature;
-  const openEdits = [...get('files').querySelectorAll('details')].map(node => node.open);
+  const openEdits = get('files').dataset.batchId === currentBatchId ? [...get('files').querySelectorAll('details')].map(node => node.open) : [];
+  get('files').dataset.batchId = currentBatchId;
   fileChips = [];
   get('files').replaceChildren(...changes.map((file, index) => {
     const card = document.createElement('article'); card.className = 'hf-card changeset-file';
@@ -270,157 +280,63 @@ const renderBatch = data => {
     title.className = 'file-link changeset-file__path'; title.textContent = file.path; title.title = file.path;
     title.onclick = () => vscode.postMessage({ type: 'openFile', path: file.path });
     const meta = document.createElement('div'); meta.className = 'changeset-file__meta';
-    const state = chip('未勾选', 'unreviewed'); fileChips[index] = state;
-    meta.append(state, chip(`${file.edits.length} 处候选片段`, 'review'));
+    const state = chip(t('未勾选'), 'unreviewed'); fileChips[index] = state;
+    meta.append(state, chip(t`${file.edits.length} 处候选片段`, 'review'));
     header.append(title, meta);
     const body = document.createElement('div'); body.className = 'hf-card__body';
     body.append(note(file.reason));
     const actions = document.createElement('div'); actions.className = 'entry-actions';
-    const preview = actionButton('对比预览（双栏）', 'secondary');
+    const preview = actionButton(t('对比预览（双栏）'), 'secondary');
     preview.dataset.action = 'preview'; preview.disabled = disabled;
-    preview.title = '在 VS Code 原生双栏 Diff 中对比原始快照与候选建议（只读，尚未应用）';
+    preview.title = t('在 VS Code 原生双栏 Diff 中对比原始快照与候选建议（只读，尚未应用）');
     preview.onclick = () => vscode.postMessage({ type: 'preview', index, batchId: currentBatchId, selection });
-    const unified = actionButton('单页改动（整份文件）', 'secondary');
+    const unified = actionButton(t('单页改动（整份文件）'), 'secondary');
     unified.dataset.action = 'preview-unified'; unified.disabled = disabled;
     // 宿主不认识 mode 时（旧宿主）隐藏入口，避免点了以后打开成双栏对比。
     unified.hidden = protocolMismatch;
-    unified.title = '在一个只读页面里显示整份候选文件：按目标语言着色（含变量），删除行标 −、新增行标 +，滚动条标记改动位置并自动定位到第一处改动';
+    unified.title = t('在一个只读页面里显示整份候选文件：按目标语言着色（含变量），删除行标 −、新增行标 +，滚动条标记改动位置并自动定位到第一处改动');
     unified.onclick = () => vscode.postMessage({ type: 'preview', mode: 'unified', index, batchId: currentBatchId, selection });
-    const explain = actionButton('解释本文件修改（填入草稿）', 'ghost');
+    const explain = actionButton(t('解释本文件修改（填入草稿）'), 'ghost');
     explain.dataset.action = 'explain';
-    explain.onclick = () => workspace.quote({ id: currentBatchId, turnId: suggestion.turnId, text: JSON.stringify(file) }, '仅解释此候选的 API 与修改依据，候选未应用', 'explain');
-    const edit = actionButton('编辑候选草稿', 'ghost'); edit.dataset.action = 'edit'; edit.disabled = locked;
+    explain.onclick = () => workspace.quote({ id: currentBatchId, turnId: suggestion.turnId, text: JSON.stringify(file) }, t('仅解释此候选的 API 与修改依据，候选未应用'), 'explain');
+    const edit = actionButton(t('编辑候选草稿'), 'ghost'); edit.dataset.action = 'edit'; edit.disabled = locked;
     edit.onclick = () => vscode.postMessage({ type: 'editDraft', index, batchId: currentBatchId });
-    const adopt = actionButton('采用草稿', 'ghost'); adopt.dataset.action = 'adopt'; adopt.disabled = locked;
+    const adopt = actionButton(t('采用草稿'), 'ghost'); adopt.dataset.action = 'adopt'; adopt.disabled = locked;
     adopt.onclick = () => vscode.postMessage({ type: 'useDraft', index, batchId: currentBatchId });
     actions.append(preview, unified, explain, edit, adopt);
     body.append(actions);
     const hunks = document.createElement('div'); hunks.className = 'changeset-file__hunks';
     file.edits.forEach((editEntry, editIndex) => {
-      const details = document.createElement('details');
+      const details = document.createElement('details'); details.id = `candidate-${currentBatchId}-${index}-${editIndex}`;
+      details.open = workspace.getOpen(details.id) ?? false;
       const summary = document.createElement('summary');
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox'; checkbox.checked = selection[index].includes(editIndex); checkbox.disabled = locked;
-      checkbox.setAttribute('aria-label', `${file.path} 第 ${editIndex + 1} 处修改`);
+      checkbox.setAttribute('aria-label', t`${file.path} 第 ${editIndex + 1} 处修改`);
       checkbox.onclick = event => event.stopPropagation();
       checkbox.onchange = () => {
         selection[index] = checkbox.checked ? [...selection[index], editIndex] : selection[index].filter(i => i !== editIndex);
         get('dependencies').checked = false;
-        updateSelectionState();
+        saveCandidateUI(); updateSelectionState();
       };
-      summary.append(checkbox, document.createTextNode(` 第 ${editIndex + 1} 处修改（展开查看候选片段）`));
+      summary.append(checkbox, document.createTextNode(t` 第 ${editIndex + 1} 处修改（展开查看候选片段）`));
       details.append(summary, renderHunk(editEntry, editIndex));
       hunks.append(details);
     });
     body.append(hunks);
     card.append(header, body); return card;
   }));
-  [...get('files').querySelectorAll('details')].forEach((node, index) => { node.open = openEdits[index] ?? false; });
+  [...get('files').querySelectorAll('details')].forEach((node, index) => { node.open = openEdits[index] ?? workspace.getOpen(node.id) ?? false; });
   get('file-position').textContent = `${Math.min(fileIndex + 1, changes.length)} / ${Math.max(changes.length, 1)}`;
   updateSelectionState();
 };
 
 // ── 问题、验证与批次记录 ─────────────────────────────────────────────
-const findingStatuses = [['open', '待处理'], ['deferred', '稍后处理'], ['dismissed', '不采纳'], ['pendingVerification', '待验证'], ['resolved', '已解决（人工确认）']];
-let selectedFindingIds = new Set(), findingsTaskId, findingsDisabled = false;
-const updateFindingSelection = () => {
-  get('finding-selection-count').textContent = `已勾选 ${selectedFindingIds.size} 个问题`;
-  get('discuss-findings').disabled = protocolMismatch || findingsDisabled || !selectedFindingIds.size;
-  get('clear-findings').disabled = !selectedFindingIds.size;
-};
-get('discuss-findings').onclick = () => { if (!protocolMismatch) workspace.discussFindings([...selectedFindingIds]); };
-get('clear-findings').onclick = () => {
-  selectedFindingIds.clear();
-  for (const box of get('findings').querySelectorAll('input[type="checkbox"]')) box.checked = false;
-  updateFindingSelection();
-};
-const renderFindings = (findings, disabled) => {
-  if (findingsTaskId !== historyTaskId) { selectedFindingIds.clear(); findingsTaskId = historyTaskId; }
-  selectedFindingIds = new Set([...selectedFindingIds].filter(id => findings.some(item => item.id === id)));
-  findingsDisabled = disabled; updateFindingSelection();
-  if (!findings.length) {
-    get('findings').replaceChildren(emptyState('no-findings', '暂未发现值得优先处理的问题。', '只读审查不修改文件；需要深入时可以针对具体文件继续讨论。'));
-    return;
-  }
-  get('findings').replaceChildren(...findings.map((item, index) => {
-    const card = document.createElement('article'); card.className = 'hf-card hf-finding-card';
-    const header = document.createElement('header'); header.className = 'hf-card__header';
-    const id = document.createElement('span'); id.className = 'hf-finding-card__id'; id.textContent = `F-${String(index + 1).padStart(3, '0')}`;
-    const choose = document.createElement('input'); choose.type = 'checkbox'; choose.checked = selectedFindingIds.has(item.id);
-    choose.disabled = disabled || protocolMismatch; choose.setAttribute('aria-label', `选择问题：${item.title}`);
-    choose.onchange = () => {
-      if (choose.checked && selectedFindingIds.size >= 50) { choose.checked = false; get('finding-selection-count').textContent = '一次最多选择 50 个问题'; return; }
-      if (choose.checked) selectedFindingIds.add(item.id); else selectedFindingIds.delete(item.id);
-      updateFindingSelection();
-    };
-    const status = document.createElement('select'); status.className = 'finding-status';
-    status.setAttribute('aria-label', `${item.title} 的处理状态`);
-    for (const [value, label] of findingStatuses) { const option = document.createElement('option'); option.value = value; option.textContent = label; status.append(option); }
-    status.value = item.status; status.disabled = disabled;
-    status.onchange = () => vscode.postMessage({ type: 'findingStatus', id: item.id, status: status.value });
-    const selectionLabel = document.createElement('label'); selectionLabel.className = 'hf-check'; selectionLabel.append(choose, id);
-    header.append(selectionLabel, status);
-    const body = document.createElement('div'); body.className = 'hf-card__body';
-    const location = document.createElement('button'); location.type = 'button';
-    const simplification = item.category === 'simplification';
-    body.append(chip(simplification ? '简化建议 · 可选' : '缺陷', 'review'));
-    location.className = 'file-link hf-finding-card__location'; location.textContent = item.locationStatus === 'stale' ? `${item.path} · 位置待确认（原 ${item.line} 行）` : `${item.path}:${item.line}`;
-    location.title = item.locationStatus === 'stale' ? '打开文件；原问题位置需要重新审查确认' : '核对当前代码后定位问题';
-    location.disabled = protocolMismatch;
-    location.onclick = () => { if (!protocolMismatch) vscode.postMessage(item.locationStatus === 'stale' ? { type: 'openFile', taskId: historyTaskId, path: item.path } : { type: 'openFinding', taskId: historyTaskId, id: item.id }); };
-    const summary = document.createElement('p'); summary.className = 'hf-finding-card__summary'; summary.textContent = item.title;
-    const evidence = document.createElement('div'); evidence.className = 'hf-finding-card__evidence';
-    const evidenceLabel = document.createElement('strong'); evidenceLabel.textContent = '依据';
-    const evidenceText = document.createElement('div'); evidenceText.textContent = item.evidence;
-    evidence.append(evidenceLabel, evidenceText);
-    const facts = document.createElement('dl'); facts.className = 'hf-finding-card__facts';
-    const fact = (term, value) => { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = term; dd.textContent = value; facts.append(dt, dd); };
-    fact('影响', item.impact);
-    if (item.replacement) fact('替代方案', item.replacement);
-    fact('状态', (findingStatuses.find(entry => entry[0] === item.status) ?? [item.status, item.status])[1]);
-    body.append(location, summary, evidence, facts);
-    const footer = document.createElement('footer'); footer.className = 'hf-card__footer';
-    const discuss = actionButton('讨论此问题', 'secondary');
-    discuss.disabled = disabled || protocolMismatch; discuss.onclick = () => { if (!protocolMismatch) workspace.discussFindings([item.id]); };
-    const fix = actionButton(simplification ? '提出简化候选' : '仅处理此问题', undefined);
-    fix.disabled = disabled; fix.onclick = () => vscode.postMessage({ type: 'fixFinding', id: item.id });
-    footer.append(discuss, fix);
-    card.append(header, body, footer); return card;
-  }));
-};
-const renderChecks = (checks, disabled) => {
-  get('checks-count').textContent = `（${checks.length}）`;
-  if (!checks.length) { get('checks').replaceChildren(note('本轮模型没有提出需要你确认的验证命令。')); return; }
-  get('checks').replaceChildren(...checks.map((item, index) => {
-    const card = document.createElement('article'); card.className = 'hf-card';
-    const body = document.createElement('div'); body.className = 'hf-card__body';
-    const code = document.createElement('pre'); code.textContent = item.command;
-    const footer = document.createElement('footer'); footer.className = 'hf-card__footer';
-    const run = actionButton('核对并运行', 'secondary');
-    run.disabled = disabled; run.onclick = () => vscode.postMessage({ type: 'validate', index });
-    footer.append(run);
-    body.append(code, note(item.reason));
-    card.append(body, footer); return card;
-  }));
-};
-const renderValidations = validations => {
-  if (!validations.length) { get('validation-records').replaceChildren(note('还没有验证记录；运行验证后结果会与当时代码版本一起保留。')); return; }
-  get('validation-records').replaceChildren(...validations.map(record => {
-    const card = document.createElement('article'); card.className = 'hf-card';
-    const body = document.createElement('div'); body.className = 'hf-card__body';
-    const head = document.createElement('div'); head.className = 'changeset-file__meta';
-    if (record.stale) head.append(icon('stale'));
-    head.append(chip(record.stale ? '需重新验证' : '记录时有效', record.stale ? 'stale' : 'reviewed'),
-      chip(`退出码 ${record.exitCode ?? '未知'}`, record.exitCode === 0 ? 'confirmed' : 'review'),
-      chip(`批次 ${record.batchId ?? '未知'}`, 'ignored'));
-    const code = document.createElement('pre'); code.textContent = record.command;
-    body.append(head, code, note(record.coverage ?? ''));
-    card.append(body); return card;
-  }));
-};
+const findingsView = HumanFlowFindingView.create({ document, vscode, workspace, i18n, chip, actionButton, emptyState, note });
+
 const renderBatchRecords = records => {
-  if (!records.length) { get('batch-records').replaceChildren(note('还没有历史批次记录。')); return; }
-  const signature = JSON.stringify(records);
+  if (!records.length) { get('batch-records').replaceChildren(note(t('还没有历史批次记录。'))); return; }
+  const signature = JSON.stringify([i18n.language, records]);
   if (get('batch-records').dataset.signature === signature) return;
   get('batch-records').dataset.signature = signature;
   get('batch-records').replaceChildren(...records.map(record => {
@@ -428,9 +344,9 @@ const renderBatchRecords = records => {
     summary.textContent = `${workspace.labels[record.status] ?? record.status} · ${record.summary}`; details.append(summary);
     details.addEventListener('toggle', () => { if (details.open && details.childElementCount === 1) {
       const pre = document.createElement('pre'); pre.textContent = JSON.stringify(record.changes, null, 2);
-      const link = actionButton('定位原始请求', 'ghost'); link.onclick = () => workspace.jump(record.turnId); details.append(link, pre);
+      const link = actionButton(t('定位原始请求'), 'ghost'); link.onclick = () => workspace.jump(record.turnId); details.append(link, pre);
       for (const [index, file] of (record.appliedSnapshots ?? []).entries()) {
-        const diff = actionButton(`查看实际应用差异：${file.relativePath}`, 'secondary');
+        const diff = actionButton(t`查看实际应用差异：${file.relativePath}`, 'secondary');
         diff.onclick = () => vscode.postMessage({ type: 'appliedDiff', taskId: historyTaskId, batchId: record.id, index }); details.append(diff);
       }
     } }); return details;
@@ -439,18 +355,19 @@ const renderBatchRecords = records => {
 
 // ── 范围、上下文、检查点与批次状态 ───────────────────────────────────
 const renderScope = (data, disabled) => {
-  get('scope').textContent = data.scope || '尚未绑定代码';
+  get('scope').textContent = data.scope ? i18n.language === 'en' && data.focusPath ? data.scope.replace(/（文件关注点）$/, ' (file focus)') : data.scope : t('尚未绑定代码');
   const budget = data.budget ?? {};
   const limits = document.createDocumentFragment();
   const row = (term, value) => { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = term; dd.textContent = value; limits.append(dt, dd); };
   if (budget.enabled) {
-    row('文件数', budget.files ?? '不额外限制');
-    row('替换后行数', budget.added ?? '不额外限制');
-    row('替换前行数', budget.removed ?? '不额外限制');
-    row('允许路径', budget.paths?.length ? budget.paths.join('、') : '整个项目');
-  } else row('修改限制', '未额外限制');
+    row(t('文件数'), budget.files ?? t('不额外限制'));
+    row(t('替换后行数'), budget.added ?? t('不额外限制'));
+    row(t('替换前行数'), budget.removed ?? t('不额外限制'));
+    row(t('允许路径'), budget.paths?.length ? budget.paths.join('、') : t('整个项目'));
+  } else row(t('修改限制'), t('未额外限制'));
   get('scope-limits').replaceChildren(limits);
   get('bind').disabled = disabled;
+  get('select-focus-file').disabled = disabled || !data.taskId;
   get('open-focus').disabled = !data.focusPath;
   get('open-focus').onclick = () => vscode.postMessage({ type: 'openFile', path: data.focusPath });
   get('selected').textContent = data.selected;
@@ -458,13 +375,13 @@ const renderScope = (data, disabled) => {
 const renderContext = data => {
   const details = data.contextDetails;
   const meter = get('context-meter');
-  if (!details) { meter.replaceChildren(note('尚未发送请求；发送后会显示本轮上下文的组成。')); }
+  if (!details) { meter.replaceChildren(note(t('尚未发送请求；发送后会显示本轮上下文的组成。'))); }
   else {
     const total = Math.max(details.characters ?? 0, 1);
     const rows = [
-      ['讨论历史', details.historyCharacters ?? 0],
-      ['当前代码', details.bufferCharacters ?? 0],
-      ['任务状态', details.stateCharacters ?? 0]
+      [t('讨论历史'), details.historyCharacters ?? 0],
+      [t('当前代码'), details.bufferCharacters ?? 0],
+      [t('任务状态'), details.stateCharacters ?? 0]
     ];
     meter.replaceChildren(...rows.map(([label, value]) => {
       const row = document.createElement('div'); row.className = 'hf-context-meter__row';
@@ -477,12 +394,12 @@ const renderContext = data => {
       row.append(name, track, amount); return row;
     }));
     const summary = document.createElement('p'); summary.className = 'hf-context-meter__note';
-    summary.textContent = `本轮合计 ${details.characters ?? 0} 字符 · ${details.mode ?? '重建上下文'} · 省略 ${(details.omittedEntries ?? 0)} 条历史`;
+    summary.textContent = t`本轮合计 ${details.characters ?? 0} 字符 · ${i18n.systemText(details.mode ?? '重建上下文')} · 省略 ${(details.omittedEntries ?? 0)} 条历史`;
     meter.append(summary);
   }
   get('context-details').textContent = details
-    ? JSON.stringify({ ...details, tokens: data.harness?.usage ?? '未知（未收到服务端用量）', compaction: data.harness?.compaction ?? '未收到压缩事件' }, null, 2)
-    : '尚未发送请求';
+    ? JSON.stringify({ ...details, tokens: data.harness?.usage ?? t('未知（未收到服务端用量）'), compaction: data.harness?.compaction ?? t('未收到压缩事件') }, null, 2)
+    : t('尚未发送请求');
 };
 const renderCheckpoint = data => {
   const changes = data.suggestion?.changes ?? [];
@@ -490,17 +407,18 @@ const renderCheckpoint = data => {
   checkpoint.hidden = !changes.length || data.stale;
   if (checkpoint.hidden) return;
   const hunks = changes.reduce((sum, file) => sum + (file.edits?.length ?? 0), 0);
-  get('checkpoint-assessment').textContent = `模型给出了候选修改：${changes.length} 个文件、${hunks} 处片段，尚未写入工程。`;
-  get('checkpoint-next').textContent = '下一步：审查并勾选需要的片段，再点击“应用并保存勾选修改”。';
+  get('checkpoint-assessment').textContent = t`模型给出了候选修改：${changes.length} 个文件、${hunks} 处片段，尚未写入工程。`;
+  get('checkpoint-next').textContent = t('下一步：审查并勾选需要的片段，再点击“应用并保存勾选修改”。');
   const stats = data.suggestion?.stats ?? {};
   get('checkpoint-facts').replaceChildren(
-    chip('未应用', 'proposed'), chip(`${changes.length} 个文件`, 'review'),
-    chip(`+${stats.added ?? 0} / −${stats.removed ?? 0} 行`, 'review'), chip('接口影响需你判断', 'confirmation'));
+    chip(t('未应用'), 'proposed'), chip(t`${changes.length} 个文件`, 'review'),
+    chip(t`+${stats.added ?? 0} / −${stats.removed ?? 0} 行`, 'review'), chip(t('接口影响需你判断'), 'confirmation'));
 };
 const renderBatchChip = data => {
-  const node = get('batch-chip'), status = lastTurn?.status;
-  const label = status === 'pendingReview' ? `待审查 · ${data.suggestion?.changes?.length ?? 0} 个文件`
-    : status === 'running' ? '生成中' : status ? workspace.labels[status] : '';
+  const node = get('batch-chip'), status = data.stale ? 'stale' : lastTurn?.status === 'running' ? 'running'
+    : data.suggestion?.changes?.length ? 'pendingReview' : lastTurn?.status;
+  const label = status === 'pendingReview' ? t`待审查 · ${data.suggestion?.changes?.length ?? 0} 个文件`
+    : status === 'running' ? t('生成中') : status ? workspace.labels[status] : '';
   const tone = status === 'pendingReview' || status === 'running' ? 'proposed'
     : status === 'stale' ? 'stale' : status === 'failed' ? 'rejected'
       : ['applied', 'partiallyApplied'].includes(status) ? 'confirmed' : 'review';
@@ -510,33 +428,40 @@ const renderBatchChip = data => {
 const renderCheckpointEmptyChanges = data => {
   const empty = get('changes-empty');
   const status = lastTurn?.status;
-  const stale = status === 'stale';
+  const stale = data.stale || status === 'stale';
   const applied = ['applied', 'partiallyApplied'].includes(status);
   empty.hidden = Boolean(data.suggestion?.changes?.length) && !data.stale;
   if (empty.hidden) return;
   get('changes-empty-art').className = `hf-empty__art hf-empty__art--${stale ? 'stale-candidate' : applied ? 'review-ready' : 'empty-task'}`;
   if (stale) {
-    get('changes-empty-title').textContent = '候选已失效';
-    get('changes-empty-body').textContent = '源代码已经变化，这批建议需要重新生成或重新验证。';
+    get('changes-empty-title').textContent = t('候选已失效');
+    get('changes-empty-body').textContent = t('当前代码或关注范围已变化，候选原文仍保留供查看；请重新生成后应用。');
   } else if (applied) {
-    get('changes-empty-title').textContent = '本批修改已处理';
-    get('changes-empty-body').textContent = '勾选的片段已经写入文件；需要继续调整时，在讨论里提出新的需求。';
+    get('changes-empty-title').textContent = t('本批修改已处理');
+    get('changes-empty-body').textContent = t('勾选的片段已经写入文件；需要继续调整时，在讨论里提出新的需求。');
   } else {
-    get('changes-empty-title').textContent = '还没有候选修改';
-    get('changes-empty-body').textContent = '先在讨论里描述需求；候选只会出现在这里，等待你逐段勾选。';
+    get('changes-empty-title').textContent = t('还没有候选修改');
+    get('changes-empty-body').textContent = t('先在讨论里描述需求；候选只会出现在这里，等待你逐段勾选。');
   }
 };
 
 get('models').onclick = () => vscode.postMessage({ type: 'models' });
 get('provider').onchange = () => vscode.postMessage({ type: 'provider', provider: get('provider').value });
 get('deepseek-key').onclick = () => vscode.postMessage({ type: 'setDeepSeekKey' });
+get('open-settings').onclick = () => vscode.postMessage({ type: 'openSettings' });
+get('open-user-settings').onclick = () => vscode.postMessage({ type: 'openUserSettings' });
+get('open-workspace-settings').onclick = () => vscode.postMessage({ type: 'openWorkspaceSettings' });
 get('model').onchange = () => vscode.postMessage({ type: 'modelChoice', model: get('model').value });
 get('effort').onchange = () => vscode.postMessage({ type: 'modelChoice', model: get('model').value, effort: get('effort').value });
 // 无选区时后端按当前文件（整个文件）绑定关注点，因此这里只负责把动作发出去。
 get('bind').onclick = () => vscode.postMessage({ type: 'bind' });
+get('select-focus-file').onclick = () => vscode.postMessage({ type: 'selectFocusFile', taskId: historyTaskId });
 get('new-task').onclick = () => vscode.postMessage({ type: 'newTask' });
 get('restore-task').onclick = () => vscode.postMessage({ type: 'restoreTask' });
 get('delete-task').onclick = () => vscode.postMessage({ type: 'deleteTask' });
+get('close-panel').onclick = () => { workspace.flushState(); vscode.postMessage({ type: 'closePanel', taskId: historyTaskId }); };
+get('discard-candidate').onclick = () => vscode.postMessage({ type: 'discardCandidate', taskId: historyTaskId, batchId: currentBatchId });
+get('reset-confirmations').onclick = () => vscode.postMessage({ type: 'resetConfirmations' });
 get('cancel').onclick = () => vscode.postMessage({ type: 'cancel' });
 get('composer-settings').onclick = () => {
   get('settings-panel').open = true;
@@ -558,29 +483,31 @@ get('form').onsubmit = event => {
   event.preventDefault();
   const question = get('question').value.trim();
   if (protocolMismatch && workspace.selectedFindings().length) {
-    get('status').textContent = '问题引用需要重新加载窗口后发送；草稿和引用已保留。'; return;
+    get('status').textContent = t('问题引用需要重新加载窗口后发送；草稿和引用已保留。'); return;
   }
-  if (question && !get('send').disabled) { vscode.postMessage({ type: 'ask', taskId: historyTaskId, question, intent: get('intent').value, findingIds: workspace.selectedFindings() }); workspace.submitted(); }
+  if (question && !get('send').disabled && !pendingSubmission) {
+    workspace.flushState(); pendingSubmission = { requestId: `request-${Date.now()}-${++submissionSequence}`, question, taskId: historyTaskId }; get('send').disabled = true;
+    vscode.postMessage({ type: 'ask', ...pendingSubmission, intent: get('intent').value, findingIds: workspace.selectedFindings() });
+  }
 };
-window.addEventListener('message', ({ data: message }) => {
-  let data = message;
-  if (data.type === 'progress') {
-    get('progress-count').textContent = data.entries.length ? `（${data.entries.length} 项）` : '';
+const renderProgress = data => {
+    get('progress-count').textContent = data.entries.length ? t`（${data.entries.length} 项）` : '';
     get('progress').replaceChildren(...data.entries.map(entry => {
       const article = document.createElement('article'), label = document.createElement('strong'), text = document.createElement('pre');
       article.className = 'progress-entry';
-      label.textContent = entry.label; text.textContent = entry.text;
+      label.textContent = i18n.systemText(entry.label); text.textContent = entry.text;
       article.append(label, text); return article;
     }));
     get('progress-panel').hidden = !data.entries.length;
-    return;
-  }
-  data = workspace.merge(message);
-  if (!data) return;
+};
+const renderSnapshot = (data, preserveInputs = false) => {
+  data = { ...data, busy: data.busy || data.confirming };
   if (data.protocol !== undefined) hostProtocol = data.protocol;
   protocolMismatch = hostProtocol !== PANEL_PROTOCOL;
+  data.busy ||= protocolMismatch;
+  for (const id of ['open-settings', 'open-user-settings', 'open-workspace-settings', 'reset-confirmations', 'close-panel']) get(id).disabled = protocolMismatch;
   protocolWarning.hidden = !protocolMismatch;
-  if (protocolMismatch) protocolWarning.textContent = '面板与扩展宿主版本不兼容：问题定位、问题引用和单页改动暂不可用。请执行“开发人员：重新加载窗口”；草稿和引用会保留。';
+  if (protocolMismatch) protocolWarning.textContent = t('面板与扩展宿主版本不兼容，候选保护和任务操作暂不可用。请执行“开发人员：重新加载窗口”；草稿和引用会保留。');
   const taskChanged = data.taskId !== historyTaskId;
   if (taskChanged) { historyWindow = 20; filesSignature = undefined; fileIndex = 0; }
   roundStates = data.turns ?? [];
@@ -595,13 +522,17 @@ window.addEventListener('message', ({ data: message }) => {
   get('search-key').disabled = data.busy || data.loadingModels;
   get('provider').disabled = data.busy || data.loadingModels;
   get('deepseek-key').disabled = data.busy || data.loadingModels;
-  if (data.suggestion?.batchId !== currentBatchId) {
+  if (taskChanged || data.suggestion?.batchId !== currentBatchId) {
     currentBatchId = data.suggestion?.batchId;
-    selection = (data.suggestion?.changes ?? []).map(() => []);
-    get('dependencies').checked = false;
-    fileIndex = 0;
+    const saved = workspace.getUI('candidate');
+    const restoring = currentBatchId && saved?.batchId === currentBatchId;
+    selection = (data.suggestion?.changes ?? []).map((file, index) => restoring && Array.isArray(saved.selection?.[index])
+      ? [...new Set(saved.selection[index].filter(i => Number.isInteger(i) && i >= 0 && i < file.edits.length))] : []);
+    get('dependencies').checked = restoring && saved.dependencies === true;
+    fileIndex = restoring && Number.isInteger(saved.fileIndex) ? Math.max(0, Math.min(saved.fileIndex, selection.length - 1)) : 0;
   }
-  locked = data.busy || data.loadingModels || data.stale || !currentBatchId;
+  locked = data.busy || data.loadingModels || data.stale || protocolMismatch || !currentBatchId;
+  get('discard-candidate').disabled = data.busy || data.loadingModels || protocolMismatch || !currentBatchId;
   const previousReviewer = get('review-model').value, previousEffort = get('review-effort').value;
   reviewModels = (data.models ?? []).filter(item => item.model !== data.suggestion?.requestedModel);
   get('review-model').replaceChildren(...reviewModels.map(item => { const option = document.createElement('option'); option.value = item.model; option.textContent = item.label; return option; }));
@@ -616,40 +547,80 @@ window.addEventListener('message', ({ data: message }) => {
   get('model').replaceChildren(...options((data.models ?? []).map(item => [item.model, `${item.label} (${item.model})`])));
   get('model').value = data.choice?.model ?? '';
   const selectedModel = data.models?.find(item => item.model === data.choice?.model);
-  get('effort').replaceChildren(...options(selectedModel?.efforts?.length ? selectedModel.efforts.map(value => [value, value]) : [['', '默认']]));
+  get('effort').replaceChildren(...options(selectedModel?.efforts?.length ? selectedModel.efforts.map(value => [value, value]) : [['', t('默认')]]));
   get('effort').value = data.choice?.effort ?? '';
   get('model-summary').textContent = [data.provider === 'deepseek' ? 'DeepSeek' : 'Codex', data.choice?.model, data.choice?.effort].filter(Boolean).join(' · ');
-  get('focus-summary').textContent = data.focusPath?.split(/[\\/]/).at(-1) || '整个项目';
-  get('task-title').textContent = data.taskTitle || 'HumanFlow 项目任务';
+  get('focus-summary').textContent = data.focusPath?.split(/[\\/]/).at(-1) || t('整个项目');
+  get('task-title').textContent = data.taskTitle || t('HumanFlow 项目任务');
   for (const id of ['model', 'effort', 'models']) get(id).disabled = data.busy || data.loadingModels;
   renderScope(data, data.busy || data.loadingModels);
   renderContext(data);
-  get('status').textContent = data.status;
-  get('send').disabled = data.busy || data.loadingModels || !data.scope || !selectedModel;
+  get('status').textContent = i18n.systemText(data.status);
+  get('send').disabled = data.busy || data.loadingModels || Boolean(pendingSubmission) || protocolMismatch || !data.scope || !selectedModel;
   for (const id of ['new-task', 'restore-task', 'delete-task']) get(id).disabled = data.busy || data.loadingModels;
   get('cancel').disabled = !data.busy;
-  get('candidate').hidden = !data.suggestion?.changes?.length || data.stale;
+  get('candidate').hidden = !data.suggestion?.changes?.length;
   renderBatchChip(data);
   renderCheckpoint(data);
   renderCheckpointEmptyChanges(data);
-  renderFindings(data.findings ?? [], data.busy || data.loadingModels);
-  get('findings-count').textContent = `（${(data.findings ?? []).length}）`;
-  renderChecks(data.checks ?? [], data.busy || data.loadingModels);
-  renderValidations(data.validations ?? []);
+  findingsView.render(data);
   renderBatchRecords((data.batches ?? []).slice().reverse());
-  const handled = (data.findings ?? []).filter(item => item.status !== 'open').length;
-  const open = (data.findings ?? []).filter(item => item.status === 'open').length;
-  get('audit-meta').textContent = `${(data.findings ?? []).length} 个问题 · ${open} 个待处理 · ${(data.checks ?? []).length} 个可选验证 · ${(data.validations ?? []).length} 条验证记录`;
-  get('audit-progress-label').textContent = `${handled} / ${(data.findings ?? []).length}`;
-  get('audit-progress-fill').style.width = `${(data.findings ?? []).length ? Math.round(handled / (data.findings ?? []).length * 100) : 0}%`;
   if (get('candidate').hidden) {
     // 候选不可见时不保留上一批的勾选与导航状态。
     currentChanges = []; fileChips = []; selectionMetric = undefined;
-    get('review-bar-count').textContent = '暂无待审查候选';
+    get('review-bar-count').textContent = t('暂无待审查候选');
     updateApply();
   } else renderBatch(data);
   renderHistory(data.history ?? [], data.taskId);
   conversation.scrollTop = followLatest ? conversation.scrollHeight : previousScroll;
-  workspace.render(taskChanged);
+  workspace.render(taskChanged, preserveInputs);
+};
+// 切换只重绘界面。草稿、设置输入、片段勾选和阅读状态保留在当前面板。
+const changeLanguage = (language, redraw = true) => {
+  if (!['zh-CN', 'en'].includes(language)) return;
+  const fields = ['question', 'goal', 'budget-paths', 'budget-files', 'budget-added', 'budget-removed', 'budget-enabled', 'thread-mode', 'decision-text', 'feedback-text', 'feedback-record'];
+  const inputs = fields.map(id => [get(id), get(id).value, get(id).checked]);
+  const details = [...document.querySelectorAll('details')].map((node, index) => [node.id, index, node.open]);
+  const scroll = conversation.scrollTop;
+  const focused = document.activeElement, focusId = focused?.id;
+  const caret = typeof focused?.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd] : null;
+  i18n.setLanguage(language); localizeStatic(); get('ui-language').value = language;
+  workspace.refreshLanguage(); confirmationView.refresh();
+  if (redraw && lastSnapshot) renderSnapshot(lastSnapshot, true);
+  if (lastProgress) renderProgress(lastProgress);
+  for (const [node, value, checked] of inputs) { node.value = value; if (checked !== undefined) node.checked = checked; }
+  get('budget-fields').hidden = !get('budget-enabled').checked;
+  const nodes = [...document.querySelectorAll('details')];
+  for (const [id, index, open] of details) { const node = id ? get(id) : nodes[index]; if (node) node.open = open; }
+  conversation.scrollTop = scroll;
+  if (focusId && get(focusId)) { get(focusId).focus({ preventScroll: true }); if (caret && get(focusId).setSelectionRange) get(focusId).setSelectionRange(...caret); }
+};
+get('ui-language').value = i18n.language;
+get('ui-language').onchange = () => {
+  const language = get('ui-language').value;
+  pendingLanguage = language;
+  changeLanguage(language);
+  vscode.postMessage({ type: 'uiLanguage', language });
+};
+window.addEventListener('message', ({ data: message }) => {
+  if (confirmationView.handle(message)) return;
+  if (['requestStarted', 'requestRejected'].includes(message.type)) {
+    if (!pendingSubmission || message.requestId !== pendingSubmission.requestId || message.taskId !== pendingSubmission.taskId) return;
+    if (message.type === 'requestStarted') {
+      if (get('question').value.trim() === pendingSubmission.question) workspace.submitted();
+      else workspace.flushState();
+    }
+    pendingSubmission = undefined; if (lastSnapshot) renderSnapshot(lastSnapshot, true); return;
+  }
+  if (findingsView.handle(message)) return;
+  if (!['snapshot', 'patch', 'progress'].includes(message.type)) return;
+  if (message.type === 'progress') { lastProgress = message; renderProgress(message); return; }
+  const data = workspace.merge(message);
+  if (!data) return;
+  lastSnapshot = data;
+  const languageAcknowledged = pendingLanguage && data.uiLanguage === pendingLanguage;
+  if (!pendingLanguage && data.uiLanguage && data.uiLanguage !== i18n.language) changeLanguage(data.uiLanguage, false);
+  renderSnapshot(data, Boolean(pendingLanguage));
+  if (languageAcknowledged) pendingLanguage = undefined;
 });
 vscode.postMessage({ type: 'ready' });

@@ -7,17 +7,17 @@
 /* ── 设计系统素材绑定 ─────────────────────────────────────────────── */
 .hf-brand-mark { width: 22px; height: 22px; flex: none; border-radius: var(--hf-radius-md); background: url("ui/HumanFlow_UI_Asset_Library_V2/brand/humanflow-icon.png") center / contain no-repeat; }
 
-.hf-icon--focus { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-focus.svg"); }
-.hf-icon--human-control { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-human-control.svg"); }
-.hf-icon--proposal { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-proposal.svg"); }
-.hf-icon--fixed-decision { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-fixed-decision.svg"); }
-.hf-icon--finding { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-finding.svg"); }
-.hf-icon--second-opinion { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-second-opinion.svg"); }
-.hf-icon--context { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-context.svg"); }
-.hf-icon--stale { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-stale.svg"); }
-.hf-icon--review { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-review.svg"); }
-.hf-icon--checkpoint { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-checkpoint.svg"); }
-.hf-icon--scope { --hf-icon: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-scope.svg"); }
+.hf-icon--focus { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-focus.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-focus.svg"); }
+.hf-icon--human-control { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-human-control.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-human-control.svg"); }
+.hf-icon--proposal { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-proposal.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-proposal.svg"); }
+.hf-icon--fixed-decision { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-fixed-decision.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-fixed-decision.svg"); }
+.hf-icon--finding { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-finding.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-finding.svg"); }
+.hf-icon--second-opinion { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-second-opinion.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-second-opinion.svg"); }
+.hf-icon--context { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-context.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-context.svg"); }
+.hf-icon--stale { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-stale.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-stale.svg"); }
+.hf-icon--review { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-review.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-review.svg"); }
+.hf-icon--checkpoint { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-checkpoint.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-checkpoint.svg"); }
+.hf-icon--scope { mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-scope.svg"); -webkit-mask-image: url("ui/HumanFlow_UI_Asset_Library_V2/icons/hf-scope.svg"); }
 
 .hf-empty__art { aspect-ratio: 180 / 110; background-position: center; background-repeat: no-repeat; background-size: contain; }
 .hf-empty__art--empty-task { background-image: url("ui/HumanFlow_UI_Asset_Library_V2/illustrations/empty-task.svg"); }
@@ -203,3 +203,32 @@ summary { cursor: pointer; padding: var(--hf-space-2) 0; overflow-wrap: anywhere
   .hf-review-bar__left, .hf-review-bar__center { justify-self: start; }
   .hf-review-bar__right { justify-self: stretch; justify-content: flex-end; }
 }
+/* 问题筛选和处理表单使用现有颜色 Token；窄窗口按阅读顺序换行。 */
+.finding-filters { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(160px, 2fr) minmax(100px, 1fr) minmax(110px, 1fr); gap: 10px; margin: 12px 0; }
+.finding-filters label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.finding-filters input, .finding-filters select { width: 100%; box-sizing: border-box; }
+.finding-toolbar { flex-wrap: wrap; }
+.finding-resolution, .finding-notice { padding: 12px; margin: 12px 0; border: 1px solid var(--vscode-panel-border); border-radius: 8px; }
+.finding-resolution-item { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--vscode-panel-border); }
+.finding-resolution-item strong { overflow-wrap: anywhere; }
+.finding-resolution-item textarea { width: 100%; box-sizing: border-box; }
+.hf-finding-card details { margin-top: 10px; }
+.hf-finding-card details pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .finding-filters { grid-template-columns: 1fr 1fr; } .finding-search-label { grid-column: 1 / -1; grid-row: 2; } }
+/* 操作确认使用浏览器原生模态框，保持键盘焦点与主题一致。 */
+.operation-confirmation {
+  color: var(--vscode-foreground);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+  border-radius: 12px;
+  padding: 20px;
+  width: min(480px, calc(100vw - 48px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  box-sizing: border-box;
+}
+.operation-confirmation::backdrop { background: rgba(0, 0, 0, 0.45); }
+.operation-confirmation h3 { margin-top: 0; }
+#confirmation-detail { white-space: pre-line; line-height: 1.6; }
+.operation-confirmation .actions { justify-content: flex-end; flex-wrap: wrap; }
+#confirmation-error:empty { display: none; }

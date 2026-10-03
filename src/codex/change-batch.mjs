@@ -26,6 +26,7 @@ export function replaceExact(text, edits) {
 export async function prepareBatch(root, changes, readText = path => readFile(path, 'utf8')) {
   const base = await realpath(root);
   const groups = new Map();
+  const created = new Set();
   const batch = [];
   for (const change of changes) {
     if (change.operation && !['edit', 'create'].includes(change.operation)) throw new Error('不支持删除或重命名操作');
@@ -36,12 +37,14 @@ export async function prepareBatch(root, changes, readText = path => readFile(pa
     if (!rel || rel === '..' || rel.startsWith('../') || rel.startsWith('..\\') || isAbsolute(rel)) throw new Error('修改路径超出项目');
     const key = process.platform === 'win32' ? path.toLowerCase() : path;
     if (change.operation === 'create') {
-      if (groups.has(key) || batch.some(file => file.path === path)) throw new Error('新增文件路径重复');
+      if (groups.has(key) || created.has(key)) throw new Error('新增文件路径重复');
       await assertAbsent(path);
       if (change.edits.length !== 1 || change.edits[0].before !== '') throw new Error('新增文件片段格式无效');
+      created.add(key);
       batch.push({ path, relativePath: rel.split('\\').join('/'), operation: 'create', reason: change.reason, edits: change.edits, before: '', after: change.edits[0].after });
       continue;
     }
+    if (created.has(key)) throw new Error('新增文件路径重复');
     if (!groups.has(key)) groups.set(key, { path, relativePath: rel.split('\\').join('/'), reasons: new Set(), edits: [] });
     const group = groups.get(key);
     group.reasons.add(change.reason);

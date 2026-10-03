@@ -69,6 +69,7 @@ const timeout = setTimeout(() => { child.kill(); console.error('扩展宿主测�
 try {
   const code = await new Promise((resolveExit, reject) => { child.once('error', reject); child.once('exit', resolveExit); });
   const result = JSON.parse(await readFile(report, 'utf8'));
+  if (result.error) throw new Error(result.error);
   if (phase === 'restore' && !result.passed?.some(name => name.includes('真实扩展进程重启后恢复'))) throw new Error('重启恢复阶段没有产生通过记录');
   console.log(JSON.stringify(result, null, 2));
   if (code !== 0 || result.error) throw new Error(result.error || '宿主测试失败');

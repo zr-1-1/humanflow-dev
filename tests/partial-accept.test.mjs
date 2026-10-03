@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { selectBatch, applySelectedBatch, saveAcceptedFiles } from '../src/codex/partial-accept.mjs';
+import { budgetViolations } from '../src/vscode/task-workflow.mjs';
 
 const batch = [
   { path: 'a', before: 'one\r\ntwo', edits: [{ before: 'one', after: '1' }, { before: 'two', after: '2' }] },
@@ -35,6 +36,29 @@ test('过期阻止提交；编辑器拒绝不报告成功', async () => {
   await assert.rejects(applySelectedBatch(batch, [[0], []], {
     validate: async () => {}, commit: async () => false,
   }), /未完成应用/);
+});
+
+test('仅勾选项计入文件/路径/行数预算，整批仍须通过过期检查', async () => {
+  const files = batch.map(file => ({ ...file, relativePath: file.path }));
+  const budget = { enabled: true, paths: ['a'], files: 1, added: 1, removed: 1 };
+  let commits = 0, checked;
+  const callbacks = {
+    validate: async all => { checked = all; },
+    validateSelection: async selected => {
+      const errors = budgetViolations(selected, budget);
+      if (errors.length) throw Error(errors.join(';'));
+    },
+    commit: async selected => { commits++; assert.equal(selected.length, 1); return true; },
+  };
+  await applySelectedBatch(files, [[0], []], callbacks);
+  assert.equal(checked, files);
+  assert.equal(commits, 1);
+  await assert.rejects(applySelectedBatch(files, [[0], [0]], callbacks), /files|允许路径/);
+  await assert.rejects(applySelectedBatch(files, [[0, 1], []], callbacks), /added|removed/);
+  await assert.rejects(applySelectedBatch(files, [[0], []], { ...callbacks,
+    validate: async all => { assert.equal(all[1].path, 'b'); throw Error('未选文件已过期'); },
+  }), /未选文件已过期/);
+  assert.equal(commits, 1);
 });
 
 test('只保存接受文件，单个失败不掩盖其他保存结果', async () => {
