@@ -16,7 +16,8 @@ async function walk(path) {
   }
 }
 // LICENSE 没有扩展名，按官方 vsce 的做法在包内改名为 LICENSE.txt，否则商店校验找不到对应零件。
-const rootFiles = [['package.json'], ['README.md'], ['LICENSE', 'LICENSE.txt'], ['CHANGELOG.md'], ['icon.png']]
+// 扩展详情使用英文 README，中文说明单独保留；仓库首页仍使用中文 README.md。
+const rootFiles = [['package.json'], ['README.en.md', 'README.md'], ['README.md', 'README.zh-CN.md'], ['LICENSE', 'LICENSE.txt'], ['CHANGELOG.md'], ['icon.png']]
   .filter(([source]) => existsSync(join(root, source)));
 for (const [source, name] of rootFiles) await add(source, name);
 const included = new Set(rootFiles.map(([source]) => source));
