@@ -1,5 +1,7 @@
 # HumanFlow
 
+**简体中文** | [English](https://github.com/zr-1-1/humanflow-dev/blob/main/README.en.md)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.95-007ACC.svg)](https://code.visualstudio.com/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
@@ -58,7 +60,7 @@ cd humanflow-dev
 npm run package
 ```
 
-产物为 `dist/humanflow-<版本>.vsix`。打包脚本使用白名单方式写入，只包含 `package.json`、`README.md`、`LICENSE`、`src/`、`media/`（存在 `CHANGELOG.md`、`icon.png` 时一并打入），不含测试、设计文档、凭据或 Git 元数据。
+产物为 `dist/humanflow-<版本>.vsix`。打包脚本使用白名单方式写入，只包含扩展清单、中英文 README、许可证、`src/`、`media/`（存在 `CHANGELOG.md`、`icon.png` 时一并打入），不含测试、设计文档、凭据或 Git 元数据。包内将英文 `README.en.md` 映射为默认详情 `README.md`，中文说明映射为 `README.zh-CN.md`；英文介绍顶部提供中文版链接。
 
 ## 快速开始
 
@@ -310,7 +312,7 @@ if ($codexExecutable) { & $codexExecutable --version }
 npm run test:extension -- "/path/to/Code"
 ```
 
-`.github/workflows/ci.yml` 在 Windows、Linux、macOS 的 Node.js 18/22/24 上串行运行全部单元测试并构建 VSIX。真实宿主、Webview 和浏览器检查仍需单独运行；CI 配置存在不等于远程检查已通过。
+`.github/workflows/ci.yml` 在 Windows、Linux、macOS 的 Node.js 18/22/24 上串行运行全部单元测试并构建 VSIX，另有 Chromium 面板交互检查。真实 VS Code 宿主与 Webview 检查使用本地独立脚本；具体提交的远程结果见 [Actions](https://github.com/zr-1-1/humanflow-dev/actions)。
 
 ### 环境变量
 
