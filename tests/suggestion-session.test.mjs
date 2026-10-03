@@ -111,15 +111,15 @@ function waitingClient() {
 }
 
 test('默认等待从 3 分钟放宽到连续 30 分钟无进度', async t => {
-  mockTimeouts(t);
+  const timers = mockTimeouts(t);
   const client = waitingClient();
   const pending = runSuggestionTurn(client, 'thread', '需求');
   const rejected = assert.rejects(pending, error => error.code === 'MODEL_RESPONSE_TIMEOUT' && error.timeoutKind === 'idle');
   await Promise.resolve();
-  t.mock.timers.tick(180000);
+  timers.tick(180000);
   assert.equal(client.requests.length, 1);
   assert.equal(client.listenerCount('notification'), 1);
-  t.mock.timers.tick(1620000);
+  timers.tick(1620000);
   await rejected;
   assert.deepEqual(client.requests.at(-1), { method: 'turn/interrupt', params: { threadId: 'thread', turnId: 'turn' } });
   assert.equal(client.listenerCount('notification'), 0);
@@ -127,57 +127,57 @@ test('默认等待从 3 分钟放宽到连续 30 分钟无进度', async t => {
 });
 
 test('当前回合流式输出延长等待，最后返回完整候选', async t => {
-  mockTimeouts(t);
+  const timers = mockTimeouts(t);
   const client = waitingClient();
   const pending = runSuggestionTurn(client, 'thread', '需求', { timeoutMs: 20 });
   await Promise.resolve();
-  t.mock.timers.tick(15);
+  timers.tick(15);
   client.emit('notification', { method: 'item/agentMessage/delta', params: { threadId: 'thread', turnId: 'turn', delta: 'partial' } });
-  t.mock.timers.tick(15);
+  timers.tick(15);
   client.emit('notification', { method: 'item/completed', params: { threadId: 'thread', turnId: 'turn', item: {
     id: 'answer', type: 'agentMessage', text: JSON.stringify({ summary: '长响应', changes: [], explanation: '', verification: '' }),
   } } });
   client.emit('notification', { method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } });
   assert.equal((await pending).summary, '长响应');
-  t.mock.timers.tick(100);
+  timers.tick(100);
   assert.deepEqual(client.requests.map(item => item.method), ['turn/start']);
   assert.equal(client.listenerCount('notification'), 0);
 });
 
 test('其他线程、旧回合和用量通知不能延长当前回合等待', async t => {
-  mockTimeouts(t);
+  const timers = mockTimeouts(t);
   const client = waitingClient();
   const pending = runSuggestionTurn(client, 'thread', '需求', { timeoutMs: 20 });
   const rejected = assert.rejects(pending, error => error.timeoutKind === 'idle');
   await Promise.resolve();
-  t.mock.timers.tick(15);
+  timers.tick(15);
   for (const [threadId, turnId] of [['other', 'turn'], ['thread', 'old']]) {
     client.emit('notification', { method: 'item/reasoning/summaryTextDelta', params: { threadId, turnId, delta: 'unrelated' } });
   }
   client.emit('notification', { method: 'thread/tokenUsage/updated', params: { threadId: 'thread', turnId: 'turn' } });
-  t.mock.timers.tick(5);
+  timers.tick(5);
   await rejected;
   assert.equal(client.listenerCount('notification'), 0);
 });
 
 test('持续有进度仍受总时长上限约束', async t => {
-  mockTimeouts(t);
+  const timers = mockTimeouts(t);
   const client = waitingClient();
   const pending = runSuggestionTurn(client, 'thread', '需求', { timeoutMs: 10 });
   const rejected = assert.rejects(pending, error => error.timeoutKind === 'total');
   await Promise.resolve();
   for (let i = 0; i < 3; i++) {
-    t.mock.timers.tick(6);
+    timers.tick(6);
     client.emit('notification', { method: 'item/started', params: { threadId: 'thread', turnId: 'turn', item: { id: `item-${i}`, type: 'reasoning' } } });
   }
-  t.mock.timers.tick(2);
+  timers.tick(2);
   await rejected;
   assert.equal(client.requests.at(-1).method, 'turn/interrupt');
   assert.equal(client.listenerCount('notification'), 0);
 });
 
 test('等待启动应答期间取消，迟到的回合仍被中断', async t => {
-  mockTimeouts(t);
+  const timers = mockTimeouts(t);
   const client = waitingClient();
   let acknowledge;
   client.request = (method, params) => {
@@ -191,7 +191,7 @@ test('等待启动应答期间取消，迟到的回合仍被中断', async t => 
   await rejected;
   acknowledge({ turn: { id: 'turn' } });
   await Promise.resolve();
-  t.mock.timers.tick(3600000);
+  timers.tick(3600000);
   assert.deepEqual(client.requests.map(item => item.method), ['turn/start', 'turn/interrupt']);
   assert.equal(client.listenerCount('notification'), 0);
 });
