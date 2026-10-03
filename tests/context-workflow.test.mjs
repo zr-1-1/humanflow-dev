@@ -1,3 +1,4 @@
+import { mockTimeouts } from './helpers/mock-timers.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -83,7 +84,7 @@ test('Harness 用量与压缩只认本线程实际事件；压缩失败、取消
 });
 
 test('模型压缩的默认等待也放宽为 30 分钟', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  mockTimeouts(t);
   const client = new EventEmitter();
   client.request = async () => {};
   const pending = compactThread(client, 't');

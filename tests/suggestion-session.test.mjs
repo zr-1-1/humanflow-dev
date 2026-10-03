@@ -1,3 +1,4 @@
+import { mockTimeouts } from './helpers/mock-timers.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -110,7 +111,7 @@ function waitingClient() {
 }
 
 test('默认等待从 3 分钟放宽到连续 30 分钟无进度', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  mockTimeouts(t);
   const client = waitingClient();
   const pending = runSuggestionTurn(client, 'thread', '需求');
   const rejected = assert.rejects(pending, error => error.code === 'MODEL_RESPONSE_TIMEOUT' && error.timeoutKind === 'idle');
@@ -126,7 +127,7 @@ test('默认等待从 3 分钟放宽到连续 30 分钟无进度', async t => {
 });
 
 test('当前回合流式输出延长等待，最后返回完整候选', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  mockTimeouts(t);
   const client = waitingClient();
   const pending = runSuggestionTurn(client, 'thread', '需求', { timeoutMs: 20 });
   await Promise.resolve();
@@ -144,7 +145,7 @@ test('当前回合流式输出延长等待，最后返回完整候选', async t 
 });
 
 test('其他线程、旧回合和用量通知不能延长当前回合等待', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  mockTimeouts(t);
   const client = waitingClient();
   const pending = runSuggestionTurn(client, 'thread', '需求', { timeoutMs: 20 });
   const rejected = assert.rejects(pending, error => error.timeoutKind === 'idle');
@@ -160,7 +161,7 @@ test('其他线程、旧回合和用量通知不能延长当前回合等待', as
 });
 
 test('持续有进度仍受总时长上限约束', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  mockTimeouts(t);
   const client = waitingClient();
   const pending = runSuggestionTurn(client, 'thread', '需求', { timeoutMs: 10 });
   const rejected = assert.rejects(pending, error => error.timeoutKind === 'total');
@@ -176,7 +177,7 @@ test('持续有进度仍受总时长上限约束', async t => {
 });
 
 test('等待启动应答期间取消，迟到的回合仍被中断', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  mockTimeouts(t);
   const client = waitingClient();
   let acknowledge;
   client.request = (method, params) => {
