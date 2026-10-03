@@ -24,6 +24,9 @@ createInterface({ input: process.stdin }).on('line', line => {
     const id = 'turn-' + ++counter;
     reply({ turn: { id } });
     if (input.request === 'wait') return;
+    if (input.request === 'fail') {
+      send({ method: 'turn/completed', params: { threadId: 'test-thread', turn: { id, status: 'failed', error: { message: '模拟替换请求失败' } } } }); return;
+    }
     send({ method: 'thread/tokenUsage/updated', params: { threadId: 'test-thread', turnId: id, tokenUsage: { total: { totalTokens: 100, inputTokens: 80, cachedInputTokens: 0, outputTokens: 20, reasoningOutputTokens: 0 }, modelContextWindow: 128000 } } });
     if (input.request === 'followup') {
       const outcome = input.task.outcomes.at(-1);

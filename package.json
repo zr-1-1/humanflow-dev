@@ -2,7 +2,7 @@
   "name": "humanflow",
   "displayName": "HumanFlow",
   "description": "持续讨论项目任务，关注代码并审查、部分接受跨文件建议。",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "publisher": "windflowing",
   "icon": "icon.png",
   "categories": [
@@ -63,6 +63,22 @@
       {
         "command": "humanflow.showFailedResponse",
         "title": "HumanFlow: 查看最近失败响应"
+      },
+      {
+        "command": "humanflow.openSettings",
+        "title": "HumanFlow: 打开扩展设置"
+      },
+      {
+        "command": "humanflow.openUserSettings",
+        "title": "HumanFlow: 打开用户设置 (JSON)"
+      },
+      {
+        "command": "humanflow.openWorkspaceSettings",
+        "title": "HumanFlow: 打开工作区设置 (JSON)"
+      },
+      {
+        "command": "humanflow.resetConfirmations",
+        "title": "HumanFlow: 恢复操作确认提示"
       }
     ],
     "menus": {
@@ -103,7 +119,85 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "可选的 Codex bin/codex.js 或 Codex 可执行文件绝对路径；留空自动查找。"
+          "description": "可选的 Codex bin/codex.js 或 Codex 可执行文件绝对路径（例如桌面端自带的 codex.exe）；留空时查找 npm 全局安装与 Windows 桌面端。"
+        },
+        "humanflow.responseIdleTimeoutSeconds": {
+          "type": "integer",
+          "default": 1800,
+          "minimum": 1,
+          "maximum": 86400,
+          "scope": "window",
+          "order": 100,
+          "markdownDescription": "模型连续无进度的等待时间（秒），默认 1800 秒（30 分钟）。收到当前回合输出或工具进度后重新计时。 修改后从下一次请求生效；支持用户设置和工作区覆盖。\n\n[打开用户 settings.json](command:humanflow.openUserSettings) · [打开工作区 settings.json](command:humanflow.openWorkspaceSettings)"
+        },
+        "humanflow.responseTotalTimeoutSeconds": {
+          "type": "integer",
+          "default": 3600,
+          "minimum": 1,
+          "maximum": 86400,
+          "scope": "window",
+          "order": 101,
+          "markdownDescription": "单轮模型请求的总等待上限（秒），默认 3600 秒（60 分钟）。持续有进度也不会延长；与无进度限制谁先到限谁生效。 修改后从下一次请求生效；支持用户设置和工作区覆盖。\n\n[打开用户 settings.json](command:humanflow.openUserSettings) · [打开工作区 settings.json](command:humanflow.openWorkspaceSettings)"
+        },
+        "humanflow.modelRequestTimeoutSeconds": {
+          "type": "integer",
+          "default": 150,
+          "minimum": 1,
+          "maximum": 86400,
+          "scope": "window",
+          "order": 102,
+          "markdownDescription": "创建/恢复线程、启动回合和启动压缩的协议应答等待（秒），默认 150 秒。与模型输出等待分别计时。 修改后从下一次请求生效；支持用户设置和工作区覆盖。\n\n[打开用户 settings.json](command:humanflow.openUserSettings) · [打开工作区 settings.json](command:humanflow.openWorkspaceSettings)"
+        },
+        "humanflow.compactionTimeoutSeconds": {
+          "type": "integer",
+          "default": 1800,
+          "minimum": 1,
+          "maximum": 86400,
+          "scope": "window",
+          "order": 103,
+          "markdownDescription": "主动压缩的完成等待（秒），默认 1800 秒（30 分钟）。 修改后从下一次请求生效；支持用户设置和工作区覆盖。\n\n[打开用户 settings.json](command:humanflow.openUserSettings) · [打开工作区 settings.json](command:humanflow.openWorkspaceSettings)"
+        },
+        "humanflow.confirmClosePanel": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "order": 200,
+          "markdownDescription": "关闭面板前显示带“以后不再提示”选项的确认弹窗。仅影响当前操作类型，保存到用户设置。\n\n[恢复所有操作确认提示](command:humanflow.resetConfirmations)"
+        },
+        "humanflow.confirmDiscardCandidate": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "order": 201,
+          "markdownDescription": "清除候选前显示带“以后不再提示”选项的确认弹窗。仅影响当前操作类型，保存到用户设置。\n\n[恢复所有操作确认提示](command:humanflow.resetConfirmations)"
+        },
+        "humanflow.confirmReplaceCandidate": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "order": 202,
+          "markdownDescription": "替换候选或采用草稿前显示带“以后不再提示”选项的确认弹窗。仅影响当前操作类型，保存到用户设置。\n\n[恢复所有操作确认提示](command:humanflow.resetConfirmations)"
+        },
+        "humanflow.confirmChangeContext": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "order": 203,
+          "markdownDescription": "切换任务、关注点或模型服务前显示带“以后不再提示”选项的确认弹窗。仅影响当前操作类型，保存到用户设置。\n\n[恢复所有操作确认提示](command:humanflow.resetConfirmations)"
+        },
+        "humanflow.confirmDeleteTask": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "order": 204,
+          "markdownDescription": "删除任务记录前显示带“以后不再提示”选项的确认弹窗。仅影响当前操作类型，保存到用户设置。\n\n[恢复所有操作确认提示](command:humanflow.resetConfirmations)"
+        },
+        "humanflow.confirmDeleteContent": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "order": 205,
+          "markdownDescription": "删除固定决策前显示带“以后不再提示”选项的确认弹窗。仅影响当前操作类型，保存到用户设置。\n\n[恢复所有操作确认提示](command:humanflow.resetConfirmations)"
         }
       }
     }
@@ -114,6 +208,7 @@
     "package": "node scripts/package-extension.mjs",
     "test:ui": "node scripts/test-ui.mjs",
     "test:harness": "node scripts/test-harness-context.mjs",
-    "benchmark:context": "node scripts/benchmark-context.mjs"
+    "benchmark:context": "node scripts/benchmark-context.mjs",
+    "test:webview": "node scripts/test-webview.mjs"
   }
 }

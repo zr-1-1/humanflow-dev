@@ -5,6 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { replaceExact, prepareBatch, assertBatchCurrent, batchChanges, candidateChangePage, changePageComment, identifierSpans, supportsIdentifierSpans } from '../src/codex/change-batch.mjs';
 
+test('新增路径去重使用平台路径键，并保留不同文件', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'hf-create-dedupe-'));
+  const create = path => ({ path, operation: 'create', reason: '新文件', edits: [{ before: '', after: 'content' }] });
+  try {
+    await assert.rejects(prepareBatch(root, [create('new.js'), create('./new.js')]), /路径重复/);
+    if (process.platform === 'win32') await assert.rejects(prepareBatch(root, [create('new.js'), create('NEW.JS')]), /路径重复/);
+    const files = await prepareBatch(root, [create('first.js'), create('second.js')]);
+    assert.equal(files.length, 2);
+    await assertBatchCurrent(files);
+  } finally { await rmdir(root); }
+});
+
 test('单页改动补充标识符标注：跳过关键字、字符串与注释', () => {
   const text = [
     '// header comment: ignored',

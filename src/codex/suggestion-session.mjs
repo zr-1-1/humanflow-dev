@@ -76,10 +76,15 @@ function codeStringRanges(text) {
 function repairInvalidEscapes(text) {
   const ranges = codeStringRanges(text);
   const inCode = index => ranges.some(([start, end]) => index >= start && index < end);
-  let result = '', repairs = 0;
+  let result = '', repairs = 0, quoted = false;
   for (let index = 0; index < text.length; index++) {
     const character = text[index], next = text[index + 1] ?? '';
-    if (character === '\\' && !jsonEscapes.has(next) && markdownEscapes.has(next)) {
+    if (character === '"') quoted = !quoted;
+    // 合法转义整体消费，第二个反斜杠或引号不能再次成为转义/字符串边界。
+    if (quoted && character === '\\' && jsonEscapes.has(next)) {
+      result += character + next; index++; continue;
+    }
+    if (quoted && character === '\\' && markdownEscapes.has(next)) {
       if (inCode(index)) throw new Error(`代码片段含非法 JSON 转义（位置 ${index}），未自动改写；请重新生成候选`);
       repairs++;
       continue;
@@ -192,7 +197,7 @@ export function parseSuggestion(text) {
 }
 
 // 监听先于 turn/start，缓存早到的事件，并按 threadId / turnId 隔离结果。
-export function runSuggestionTurn(client, threadId, prompt, { signal, timeoutMs = 180000, model, effort, onProgress } = {}) {
+export function runSuggestionTurn(client, threadId, prompt, { signal, timeoutMs = 1800000, maxDurationMs = timeoutMs * 2, model, effort, onProgress } = {}) {
   return new Promise((resolveTurn, rejectTurn) => {
     let turnId;
     let done = false;
@@ -202,7 +207,8 @@ export function runSuggestionTurn(client, threadId, prompt, { signal, timeoutMs 
     const finish = (error, value) => {
       if (done) return;
       done = true;
-      clearTimeout(timer);
+      clearTimeout(idleTimer);
+      clearTimeout(totalTimer);
       client.off('notification', onEvent);
       client.off('disconnected', onDisconnect);
       signal?.removeEventListener('abort', onAbort);
@@ -214,10 +220,13 @@ export function runSuggestionTurn(client, threadId, prompt, { signal, timeoutMs 
     const onAbort = () => { interrupt(); finish(new Error('已取消本轮请求')); };
     const onDisconnect = error => finish(error);
     const onEvent = event => {
+      if (done) return;
       const p = event.params;
       if (p?.threadId !== threadId) return;
       if (!turnId) { early.push(event); return; }
       if ((p.turnId ?? p.turn?.id) !== turnId) return;
+      // 仅当前回合的实际工作事件延长等待；其他线程、旧回合和用量通知不算进度。
+      if (event.method.startsWith('item/') || ['turn/started', 'turn/plan/updated', 'turn/diff/updated'].includes(event.method)) renewIdleTimeout();
       progress(event);
       if (event.method === 'item/completed' && p.item?.type === 'agentMessage') {
         if (!p.item.phase || p.item.phase === 'final_answer') messages.set(p.item.id, p.item.text);
@@ -236,7 +245,23 @@ export function runSuggestionTurn(client, threadId, prompt, { signal, timeoutMs 
         }
       }
     };
-    const timer = setTimeout(() => { interrupt(); finish(new Error('模型响应超时')); }, timeoutMs);
+    const timeout = kind => {
+      const error = new Error(kind === 'idle'
+        ? '模型响应超时：长时间未收到当前回合进度。请检查连接，或缩小本轮范围、降低推理强度后重试。'
+        : '模型响应超时：已达到本轮总等待上限。请缩小本轮范围或降低推理强度后重试。');
+      error.code = 'MODEL_RESPONSE_TIMEOUT';
+      error.timeoutKind = kind;
+      interrupt();
+      finish(error);
+    };
+    // 默认连续 30 分钟无进度才中断；即使持续有进度，总等待也不超过 60 分钟。
+    let idleTimer;
+    const renewIdleTimeout = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => timeout('idle'), timeoutMs);
+    };
+    const totalTimer = setTimeout(() => timeout('total'), maxDurationMs);
+    renewIdleTimeout();
     client.on('notification', onEvent);
     client.on('disconnected', onDisconnect);
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -250,6 +275,7 @@ export function runSuggestionTurn(client, threadId, prompt, { signal, timeoutMs 
     }).then(result => {
       turnId = result.turn.id;
       if (done) { interrupt(); return; }
+      renewIdleTimeout();
       for (const event of early) onEvent(event);
     }).catch(error => finish(error));
   });

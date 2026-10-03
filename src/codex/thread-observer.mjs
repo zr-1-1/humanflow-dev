@@ -8,7 +8,7 @@ export function observeThread(event, threadId, current = {}) {
   return current;
 }
 
-export function compactThread(client, threadId, { signal, timeoutMs = 180000 } = {}) {
+export function compactThread(client, threadId, { signal, timeoutMs = 1800000 } = {}) {
   return new Promise((resolve, reject) => {
     let done = false, compactTurn;
     const finish = error => {

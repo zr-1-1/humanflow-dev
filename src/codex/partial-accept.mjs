@@ -16,10 +16,11 @@ export function selectBatch(batch, selection) {
 }
 
 // 调用方必须在 commit 内再次同步核对文档版本，避免异步校验窗口中的人工编辑被覆盖。
-export async function applySelectedBatch(batch, selection, { validate, commit }) {
+export async function applySelectedBatch(batch, selection, { validate, validateSelection, commit }) {
   const selected = selectBatch(batch, selection);
   if (!selected.length) throw new Error('请至少勾选一处修改');
   await validate(batch);
+  await validateSelection?.(selected);
   if (!await commit(selected)) throw new Error('编辑器未完成应用，请检查文件状态后重新生成；不要重复提交旧批次');
   return selected;
 }

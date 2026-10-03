@@ -10,7 +10,22 @@ exports.run = async () => {
   // 路径设置是 machine 作用域；必须确认隔离用户配置生效，禁止回退到真实 CLI。
   assert.equal(vscode.workspace.getConfiguration('humanflow').get('codexJsPath'), join(extension.extensionPath, 'tests/fixtures/fake-codex.cjs'));
   const api = await extension.activate();
-  const dispatch = api.dispatch;
+  let autoNativeConfirm = true;
+  const dispatch = async message => {
+    // 原生标签可能因测试中的编辑器布局操作被关闭，先完成独立的关闭确认。
+    const previous = api.snapshot().confirmation;
+    if (previous) {
+      await api.dispatch({ ...previous, type: 'confirmationResult', accepted: previous.kind !== 'closePanel', dontAskAgain: false });
+      while (api.snapshot().closingPanel) await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    let done = false; const operation = api.dispatch(message).finally(() => { done = true; });
+    while (!done) {
+      const pending = api.snapshot().confirmation;
+      if (pending && (autoNativeConfirm || pending.kind !== 'closePanel' || message.type === 'closePanel')) await api.dispatch({ ...pending, type: 'confirmationResult', accepted: message.type === 'closePanel' || pending.kind !== 'closePanel', dontAskAgain: false });
+      else await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    return operation;
+  };
   const record = name => { results.push(name); console.log('PASS: ' + name); };
   try {
     if (process.env.HUMANFLOW_TEST_PHASE === 'restore') {
@@ -22,6 +37,11 @@ exports.run = async () => {
       assert.equal(api.snapshot().suggestion, null);
       assert.equal(api.snapshot().task.draft, '重启后继续的草稿');
       assert.equal(api.snapshot().task.uiState.view, 'changes');
+      const closed = api.snapshot().task.findings.find(item => item.id === previous.closedFinding.id);
+      assert.equal(closed.displayNumber, previous.closedFinding.displayNumber);
+      assert.equal(closed.status, 'resolved');
+      assert.equal(closed.statusHistory.at(-1).reason, '宿主重启前确认');
+      assert.equal(api.snapshot().task.uiState.findings.view, 'ended');
       previous.passed.push('真实扩展进程重启后恢复讨论、应用记录和问题列表，旧候选不可应用');
       writeFileSync(process.env.HUMANFLOW_TEST_REPORT, JSON.stringify(previous, null, 2));
       return;
@@ -52,7 +72,7 @@ exports.run = async () => {
     await dispatch({ type: 'bind' });
     assert.equal(api.snapshot().task.id, originalTask);
     await dispatch({ type: 'ask', question: 'followup' });
-    assert.ok(api.snapshot().suggestion, api.snapshot().status);
+    assert.ok(api.snapshot().suggestion, JSON.stringify({ status: api.snapshot().status, busy: api.snapshot().busy, navigating: api.snapshot().navigating, closingPanel: api.snapshot().closingPanel, loadingModels: api.snapshot().loadingModels, confirmation: api.snapshot().confirmation, turns: api.snapshot().task.turns.length }));
     record('手动编辑与切换关注点后保留任务，追问收到接受/未接受结果及未保存缓冲区');
     await dispatch({ type: 'ask', question: 'initial' });
     const staleId = api.snapshot().suggestion.batchId;
@@ -61,7 +81,7 @@ exports.run = async () => {
     await vscode.workspace.applyEdit(userEdit);
     await dispatch({ type: 'apply', batchId: staleId, selection: [[0], []] });
     assert.ok(doc.getText().startsWith('// 人工修改'));
-    assert.equal(api.snapshot().suggestion, null);
+    assert.equal(api.snapshot().suggestion.batchId, staleId); assert.equal(api.snapshot().stale, true);
     record('用户编辑使旧批次失效，旧应用请求不能覆盖新代码');
     const pending = dispatch({ type: 'ask', question: 'wait' });
     await new Promise(resolve => setTimeout(resolve, 150));
@@ -73,6 +93,7 @@ exports.run = async () => {
     await api.flush();
     // 此处验证面板重开；扩展进程重启恢复另由离线控制器测试覆盖。
     const historyLength = api.snapshot().history.length;
+    await dispatch({ type: 'closePanel' });
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
     await vscode.commands.executeCommand('humanflow.open');
     assert.equal(api.snapshot().task.id, originalTask);
@@ -81,7 +102,7 @@ exports.run = async () => {
     await dispatch({ type: 'ask', question: 'audit' });
     assert.ok(api.snapshot().task.findings.length);
     const findingId = api.snapshot().task.findings[0].id;
-    await dispatch({ type: 'findingStatus', id: findingId, status: 'deferred' });
+    await dispatch({ type: 'findingStatus', taskId: api.snapshot().task.id, id: findingId, revision: api.snapshot().task.findings[0].revision, status: 'deferred' });
     await dispatch({ type: 'fixFinding', id: findingId });
     state = api.snapshot();
     assert.ok(state.suggestion.changes.length, state.status);
@@ -107,6 +128,53 @@ exports.run = async () => {
       }
       throw new Error(message);
     };
+    // 打开命令、隐藏页面和原生叉号都不能先取消模型或删除上一批候选。
+    const protectedId = api.snapshot().suggestion.batchId, protectedFocus = api.snapshot().task.focus;
+    await vscode.commands.executeCommand('humanflow.open');
+    assert.equal(api.snapshot().suggestion.batchId, protectedId);
+    assert.deepEqual(api.snapshot().task.focus, protectedFocus);
+    let activeRequest = dispatch({ type: 'ask', question: 'wait' });
+    await waitFor(() => api.snapshot().busy, '等待模型请求启动');
+    autoNativeConfirm = false;
+    const panelGroup = vscode.window.tabGroups.all.find(group => group.tabs.some(tab => panelTabs().includes(tab)));
+    const bDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(join(root, 'b.js')));
+    await vscode.window.showTextDocument(bDoc, { viewColumn: panelGroup.viewColumn, preview: false });
+    assert.equal(api.snapshot().busy, true, '隐藏面板仍保持模型请求');
+    assert.equal(api.snapshot().suggestion.batchId, protectedId);
+    await vscode.commands.executeCommand('humanflow.open');
+    assert.equal(api.snapshot().busy, true, '重新唤起面板仍保持请求');
+    await vscode.window.tabGroups.close(panelTabs());
+    await waitFor(() => api.snapshot().confirmation?.kind === 'closePanel', '原生叉号应恢复页面并等待确认');
+    assert.equal(api.snapshot().busy, true, '确认前不能取消模型');
+    assert.equal(api.snapshot().suggestion.batchId, protectedId);
+    await waitFor(() => panelTabs().length === 1, '原生关闭后应只恢复一个面板');
+    await api.dispatch({ ...api.snapshot().confirmation, type: 'confirmationResult', accepted: false, dontAskAgain: false });
+    autoNativeConfirm = true;
+    assert.equal(api.snapshot().busy, true);
+    await dispatch({ type: 'cancel' }); await activeRequest;
+    assert.equal(api.snapshot().suggestion.batchId, protectedId, '取消替换请求保留上一批候选');
+    record('隐藏和重新唤起保留请求；原生叉号确认前不取消，取消关闭保留候选');
+    activeRequest = dispatch({ type: 'ask', question: 'wait' });
+    await waitFor(() => api.snapshot().busy, '等待第二次模型请求启动');
+    autoNativeConfirm = false;
+    await vscode.window.tabGroups.close(panelTabs());
+    await waitFor(() => api.snapshot().confirmation?.kind === 'closePanel', '第二次原生关闭应等待确认');
+    await api.dispatch({ ...api.snapshot().confirmation, type: 'confirmationResult', accepted: true, dontAskAgain: true });
+    autoNativeConfirm = true; await activeRequest;
+    await waitFor(() => !api.snapshot().closingPanel, '确认关闭应完成清理');
+    assert.equal(api.snapshot().busy, false);
+    assert.equal(vscode.workspace.getConfiguration('humanflow').get('confirmClosePanel'), false, '不再提示写入隔离用户配置');
+    await vscode.commands.executeCommand('humanflow.open');
+    assert.equal(api.snapshot().suggestion.batchId, protectedId, '确认关闭后重新打开仍有候选');
+    await dispatch({ type: 'closePanel' });
+    assert.equal(api.snapshot().confirmation, undefined, '禁用关闭提示后直接关闭');
+    await dispatch({ type: 'resetConfirmations' });
+    assert.equal(vscode.workspace.getConfiguration('humanflow').get('confirmClosePanel'), true);
+    await vscode.commands.executeCommand('humanflow.open');
+    await dispatch({ type: 'ask', question: 'fail' });
+    assert.match(api.snapshot().status, /失败/);
+    assert.equal(api.snapshot().suggestion.batchId, protectedId, '替换失败保留上一批候选');
+    record('确认关闭才取消请求；关闭重开、替换失败、不再提示和恢复提示生效');
     const previewBatch = api.snapshot().suggestion.batchId;
     await dispatch({ type: 'preview', index: 0, batchId: previewBatch, selection: [[0], []] });
     assert.equal(diffTabs().length, baseDiff + 1, '预览应打开一个 diff 标签页：' + JSON.stringify(diffTabs().map(tab => [tab.isPreview, tab.isActive])));
@@ -175,7 +243,7 @@ exports.run = async () => {
     // 观察：关闭面板页面后重新执行命令，是否恢复且只有一页。
     const panelBeforeClose = panelTabs().length;
     const previewBeforePanelClose = previewTabs().length;
-    await vscode.window.tabGroups.close(panelTabs());
+    await dispatch({ type: 'closePanel' });
     await new Promise(resolve => setTimeout(resolve, 150));
     const panelAfterClose = panelTabs().length;
     await vscode.commands.executeCommand('humanflow.open');
@@ -229,14 +297,47 @@ exports.run = async () => {
     assert.equal(api.snapshot().task.contextDetails.thread, '复用 / 恢复');
     await dispatch({ type: 'compact' });
     assert.equal(api.snapshot().task.harness.compaction, '已压缩');
+    const config = vscode.workspace.getConfiguration('humanflow');
+    assert.equal(config.get('responseIdleTimeoutSeconds'), 1800);
+    await config.update('responseIdleTimeoutSeconds', 45, vscode.ConfigurationTarget.Workspace);
+    assert.equal(vscode.workspace.getConfiguration('humanflow').get('responseIdleTimeoutSeconds'), 45);
+    await vscode.commands.executeCommand('humanflow.openUserSettings');
+    assert.ok(vscode.window.activeTextEditor.document.uri.fsPath.endsWith('settings.json'));
+    assert.ok(!vscode.window.activeTextEditor.document.uri.fsPath.startsWith(root));
+    await vscode.commands.executeCommand('humanflow.openWorkspaceSettings');
+    assert.equal(vscode.window.activeTextEditor.document.uri.fsPath, join(root, '.vscode', 'settings.json'));
+    assert.match(vscode.window.activeTextEditor.document.getText(), /humanflow.responseIdleTimeoutSeconds/);
+    await config.update('responseIdleTimeoutSeconds', undefined, vscode.ConfigurationTarget.Workspace);
+    record('真实设置默认值、工作区覆盖和打开用户/工作区 JSON 命令可用');
+    const currentFinding = () => api.snapshot().task.findings[0];
+    const closeFinding = note => dispatch({ type: 'findingTransition', taskId: originalTask, updates: [{ id: currentFinding().id, revision: currentFinding().revision, status: 'resolved', method: 'manual', note }] });
+    await closeFinding('已人工核对');
+    assert.equal(currentFinding().status, 'resolved');
+    const closure = structuredClone(currentFinding().statusHistory.at(-1));
+    await dispatch({ type: 'ask', question: 'audit' });
+    assert.equal(currentFinding().status, 'resolved'); assert.equal(currentFinding().needsReview, true);
+    assert.deepEqual(currentFinding().statusHistory.find(item => item.id === closure.id), closure);
+    record('真实宿主关闭问题后再次报告提示复查，冻结原关闭依据');
+    await dispatch({ type: 'findingTransition', taskId: originalTask, updates: [{ id: currentFinding().id, revision: currentFinding().revision, status: 'resolved', action: 'retain', note: '复查后维持结论' }] });
+    assert.equal(currentFinding().needsReview, false);
+    const retained = currentFinding().statusHistory.at(-1);
+    await dispatch({ type: 'findingTransition', taskId: originalTask, updates: [{ id: currentFinding().id, revision: currentFinding().revision, action: 'undo', eventId: retained.id }] });
+    assert.equal(currentFinding().needsReview, true);
+    await dispatch({ type: 'findingTransition', taskId: originalTask, updates: [{ id: currentFinding().id, revision: currentFinding().revision, status: 'open' }] });
+    assert.equal(currentFinding().status, 'open');
+    record('真实宿主复查、撤销和重新打开保留处理历史');
+    await closeFinding('宿主重启前确认');
+    const closedFinding = { id: currentFinding().id, displayNumber: currentFinding().displayNumber };
+    // 此段直接写宿主 UI 状态；先关闭真实 Webview，避免其延迟保存覆盖测试输入。
+    await dispatch({ type: 'closePanel' });
     await dispatch({ type: 'draft', taskId: originalTask, text: '重启后继续的草稿' });
-    await dispatch({ type: 'uiState', taskId: originalTask, value: { view: 'changes', scroll: { discuss: 200 } } });
+    await dispatch({ type: 'uiState', taskId: originalTask, value: { view: 'changes', scroll: { discuss: 200 }, findings: { view: 'ended', query: '', limit: 50 } } });
     record('宿主持续线程复用、压缩事件、草稿和阅读状态持久化（模型为协议替身）');
     // 关闭测试草稿时丢弃，不影响已验证的业务文件。
     await vscode.window.showTextDocument(draft);
     await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
     await api.flush();
-    writeFileSync(process.env.HUMANFLOW_TEST_REPORT, JSON.stringify({ passed: results, previewTabInfo, taskId: originalTask, historyLength: api.snapshot().history.length }, null, 2));
+    writeFileSync(process.env.HUMANFLOW_TEST_REPORT, JSON.stringify({ passed: results, previewTabInfo, closedFinding, taskId: originalTask, historyLength: api.snapshot().history.length }, null, 2));
   } catch (error) {
     writeFileSync(process.env.HUMANFLOW_TEST_REPORT, JSON.stringify({ passed: results, error: error.stack }, null, 2));
     throw error;

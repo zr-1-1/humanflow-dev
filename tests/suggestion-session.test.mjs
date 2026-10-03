@@ -1,3 +1,4 @@
+import { mockTimeouts } from './helpers/mock-timers.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -5,6 +6,21 @@ import { mkdtemp, writeFile, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { captureSelection, assertUnchanged, parseSuggestion, runSuggestionTurn, startSuggestionSession, suggestionSchema } from '../src/codex/suggestion-session.mjs';
+
+test('修复说明文字不重新解释代码中的合法反斜杠和转义引号', () => {
+  for (const code of [String.raw`const pattern = /\_/;`, String.raw`const path = "C:\\temp";`,
+    String.raw`const value = "\\\"_";`, String.raw`const pattern = /\*\[\]/;`]) {
+    const value = { summary: 'placeholder', explanation: '说明', verification: '未运行',
+      changes: [{ path: 'a.js', reason: '测试', edits: [{ before: code, after: code + '\n' }] }] };
+    const raw = JSON.stringify(value).replace('placeholder', String.raw`hello\_world`);
+    const parsed = parseSuggestion(raw);
+    assert.equal(parsed.summary, 'hello_world');
+    assert.equal(parsed.repairs, 1);
+    assert.deepEqual(parsed.changes[0].edits, value.changes[0].edits);
+  }
+  const illegal = String.raw`{"summary":"hello\_world","explanation":"","verification":"","changes":[{"path":"a.js","reason":"","edits":[{"before":"old","after":"bad\_code"}]}]}`;
+  assert.throws(() => parseSuggestion(illegal), /代码片段含非法 JSON 转义/);
+});
 
 test('简化审查区分类别，保留替代方案并兼容旧响应', () => {
   const finding = { path: 'a.js', line: 1, title: '复用已有实现', evidence: '两个调用点复制了同一逻辑', impact: '减少重复维护' };
@@ -81,6 +97,102 @@ test('超时发送中断并清理监听器', async () => {
   client.request = async method => { methods.push(method); return { turn: { id: 'turn' } }; };
   await assert.rejects(runSuggestionTurn(client, 'thread', '需求', { timeoutMs: 20 }), /超时/);
   assert.deepEqual(methods, ['turn/start', 'turn/interrupt']);
+  assert.equal(client.listenerCount('notification'), 0);
+});
+
+function waitingClient() {
+  const client = new EventEmitter();
+  client.requests = [];
+  client.request = async (method, params) => {
+    client.requests.push({ method, params });
+    return { turn: { id: 'turn' } };
+  };
+  return client;
+}
+
+test('默认等待从 3 分钟放宽到连续 30 分钟无进度', async t => {
+  const timers = mockTimeouts(t);
+  const client = waitingClient();
+  const pending = runSuggestionTurn(client, 'thread', '需求');
+  const rejected = assert.rejects(pending, error => error.code === 'MODEL_RESPONSE_TIMEOUT' && error.timeoutKind === 'idle');
+  await Promise.resolve();
+  timers.tick(180000);
+  assert.equal(client.requests.length, 1);
+  assert.equal(client.listenerCount('notification'), 1);
+  timers.tick(1620000);
+  await rejected;
+  assert.deepEqual(client.requests.at(-1), { method: 'turn/interrupt', params: { threadId: 'thread', turnId: 'turn' } });
+  assert.equal(client.listenerCount('notification'), 0);
+  assert.equal(client.listenerCount('disconnected'), 0);
+});
+
+test('当前回合流式输出延长等待，最后返回完整候选', async t => {
+  const timers = mockTimeouts(t);
+  const client = waitingClient();
+  const pending = runSuggestionTurn(client, 'thread', '需求', { timeoutMs: 20 });
+  await Promise.resolve();
+  timers.tick(15);
+  client.emit('notification', { method: 'item/agentMessage/delta', params: { threadId: 'thread', turnId: 'turn', delta: 'partial' } });
+  timers.tick(15);
+  client.emit('notification', { method: 'item/completed', params: { threadId: 'thread', turnId: 'turn', item: {
+    id: 'answer', type: 'agentMessage', text: JSON.stringify({ summary: '长响应', changes: [], explanation: '', verification: '' }),
+  } } });
+  client.emit('notification', { method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'completed' } } });
+  assert.equal((await pending).summary, '长响应');
+  timers.tick(100);
+  assert.deepEqual(client.requests.map(item => item.method), ['turn/start']);
+  assert.equal(client.listenerCount('notification'), 0);
+});
+
+test('其他线程、旧回合和用量通知不能延长当前回合等待', async t => {
+  const timers = mockTimeouts(t);
+  const client = waitingClient();
+  const pending = runSuggestionTurn(client, 'thread', '需求', { timeoutMs: 20 });
+  const rejected = assert.rejects(pending, error => error.timeoutKind === 'idle');
+  await Promise.resolve();
+  timers.tick(15);
+  for (const [threadId, turnId] of [['other', 'turn'], ['thread', 'old']]) {
+    client.emit('notification', { method: 'item/reasoning/summaryTextDelta', params: { threadId, turnId, delta: 'unrelated' } });
+  }
+  client.emit('notification', { method: 'thread/tokenUsage/updated', params: { threadId: 'thread', turnId: 'turn' } });
+  timers.tick(5);
+  await rejected;
+  assert.equal(client.listenerCount('notification'), 0);
+});
+
+test('持续有进度仍受总时长上限约束', async t => {
+  const timers = mockTimeouts(t);
+  const client = waitingClient();
+  const pending = runSuggestionTurn(client, 'thread', '需求', { timeoutMs: 10 });
+  const rejected = assert.rejects(pending, error => error.timeoutKind === 'total');
+  await Promise.resolve();
+  for (let i = 0; i < 3; i++) {
+    timers.tick(6);
+    client.emit('notification', { method: 'item/started', params: { threadId: 'thread', turnId: 'turn', item: { id: `item-${i}`, type: 'reasoning' } } });
+  }
+  timers.tick(2);
+  await rejected;
+  assert.equal(client.requests.at(-1).method, 'turn/interrupt');
+  assert.equal(client.listenerCount('notification'), 0);
+});
+
+test('等待启动应答期间取消，迟到的回合仍被中断', async t => {
+  const timers = mockTimeouts(t);
+  const client = waitingClient();
+  let acknowledge;
+  client.request = (method, params) => {
+    client.requests.push({ method, params });
+    return method === 'turn/start' ? new Promise(resolve => { acknowledge = resolve; }) : Promise.resolve({});
+  };
+  const controller = new AbortController();
+  const pending = runSuggestionTurn(client, 'thread', '需求', { signal: controller.signal });
+  const rejected = assert.rejects(pending, /取消/);
+  controller.abort();
+  await rejected;
+  acknowledge({ turn: { id: 'turn' } });
+  await Promise.resolve();
+  timers.tick(3600000);
+  assert.deepEqual(client.requests.map(item => item.method), ['turn/start', 'turn/interrupt']);
   assert.equal(client.listenerCount('notification'), 0);
 });
 

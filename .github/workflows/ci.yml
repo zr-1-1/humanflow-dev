@@ -10,19 +10,31 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: 离线测试（${{ matrix.os }}）
-    runs-on: ${{ matrix.os }}
+  unit:
+    name: ${{ matrix.node == 22 && format('离线测试（{0}）', matrix.os) || format('离线测试（{0} / Node.js {1}）', matrix.os, matrix.node) }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [18, 22, 24]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
-      - run: npm test
+          node-version: ${{ matrix.node }}
+      - name: Run all unit tests
+        shell: pwsh
+        run: |
+          $testFiles = @(Get-ChildItem tests -Filter '*.test.mjs' | ForEach-Object FullName)
+          node --test --test-concurrency=1 @testFiles
+          exit $LASTEXITCODE
+      - name: Build extension
+        run: npm run package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vsix-${{ matrix.os }}-node${{ matrix.node }}
+          path: dist/*.vsix
 
   ui:
     name: 面板交互检查（Chromium）

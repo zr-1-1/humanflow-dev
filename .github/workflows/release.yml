@@ -15,6 +15,7 @@ permissions:
 jobs:
   release:
     name: 构建并发布 VSIX
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
@@ -25,8 +26,14 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - run: npm test
+      - name: 校验标签与版本
+        run: node -e "if (process.env.TAG !== 'v' + require('./package.json').version) process.exit(1)"
+      - run: node --test --test-concurrency=1 tests/*.test.mjs
       - run: npm run package
+      - name: 生成安装包校验文件
+        run: |
+          cd dist
+          sha256sum *.vsix > "humanflow-${TAG#v}.vsix.sha256"
       - name: 准备 Release 说明
         id: notes
         env:
@@ -43,22 +50,17 @@ jobs:
             body="${section}${automatic}"
           fi
           { echo "body<<RELEASE_NOTES"; printf '%s\n' "${body}"; echo "RELEASE_NOTES"; } >> "$GITHUB_OUTPUT"
-      - name: 创建或更新 GitHub Release 并附加 VSIX
+      - name: 创建 GitHub Release 并附加 VSIX 与校验文件
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NOTES: ${{ steps.notes.outputs.body }}
         run: |
-          # 每次都重写说明，避免重跑标签时正文停留在旧内容。
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.vsix --clobber
-            if [ -n "${NOTES}" ]; then
-              gh release edit "$TAG" --title "HumanFlow $TAG" --notes "${NOTES}"
-            else
-              gh release edit "$TAG" --title "HumanFlow $TAG"
-              echo "::warning::未能生成 Release 说明，已保留原说明"
-            fi
-          elif [ -n "${NOTES}" ]; then
-            gh release create "$TAG" dist/*.vsix --title "HumanFlow $TAG" --notes "${NOTES}" --verify-tag
+            echo "::error::此版本已经发布，请检查现有 Release；不覆盖其文件"
+            exit 1
+          fi
+          if [ -n "${NOTES}" ]; then
+            gh release create "$TAG" dist/*.vsix dist/*.vsix.sha256 --title "HumanFlow $TAG" --notes "$NOTES" --verify-tag
           else
-            gh release create "$TAG" dist/*.vsix --title "HumanFlow $TAG" --generate-notes --verify-tag
+            gh release create "$TAG" dist/*.vsix dist/*.vsix.sha256 --title "HumanFlow $TAG" --generate-notes --verify-tag
           fi

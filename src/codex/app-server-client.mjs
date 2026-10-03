@@ -2,6 +2,9 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createInterface } from 'node:readline';
 
+// 创建、恢复线程和启动模型工作可能触发加载或上下文处理，使用独立的应答等待。
+const modelRequestMethods = new Set(['thread/start', 'thread/resume', 'thread/compact/start', 'turn/start']);
+
 // 只负责协议传输；不自动创建任务、批准工具或应用代码。
 export class AppServerClient extends EventEmitter {
   #process;
@@ -11,9 +14,10 @@ export class AppServerClient extends EventEmitter {
   #exit;
   toolHandler;
 
-  constructor(command, args = [], { cwd = process.cwd(), timeoutMs = 15000, env } = {}) {
+  constructor(command, args = [], { cwd = process.cwd(), timeoutMs = 15000, modelRequestTimeoutMs = timeoutMs * 10, env } = {}) {
     super();
     this.timeoutMs = timeoutMs;
+    this.modelRequestTimeoutMs = modelRequestTimeoutMs;
     this.#process = spawn(command, args, {
       cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...(env ? { env: { ...process.env, ...env } } : {}),
     });
@@ -85,7 +89,7 @@ export class AppServerClient extends EventEmitter {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
         reject(new Error(`请求超时：${method}`));
-      }, this.timeoutMs);
+      }, modelRequestMethods.has(method) ? this.modelRequestTimeoutMs : this.timeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
       try {
         this.#send({ id, method, params });

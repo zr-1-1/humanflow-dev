@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { contentVersion } from './context-builder.mjs';
+import { normalizeFindings } from './finding-state.mjs';
 
 export function normalizeTask(task) {
+  normalizeFindings(task);
   task.turns ??= []; task.decisions ??= []; task.validations ??= []; task.batches ??= [];
   task.budget ??= { enabled: false, paths: [], files: null, added: null, removed: null };
   // 旧版自动填写的默认预算不再强制启用；自定义过的限制保留。

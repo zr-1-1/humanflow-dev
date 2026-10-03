@@ -1,3 +1,4 @@
+import { mockTimeouts } from './helpers/mock-timers.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -79,5 +80,18 @@ test('Harness 用量与压缩只认本线程实际事件；压缩失败、取消
   await assert.rejects(compactThread(client, 't', { timeoutMs: 5 }), /超时/);
   const controller = new AbortController(); controller.abort();
   await assert.rejects(compactThread(client, 't', { signal: controller.signal }), /取消/);
+  assert.equal(client.listenerCount('notification'), 0);
+});
+
+test('模型压缩的默认等待也放宽为 30 分钟', async t => {
+  const timers = mockTimeouts(t);
+  const client = new EventEmitter();
+  client.request = async () => {};
+  const pending = compactThread(client, 't');
+  const rejected = assert.rejects(pending, /压缩超时/);
+  timers.tick(180000);
+  assert.equal(client.listenerCount('notification'), 1);
+  timers.tick(1620000);
+  await rejected;
   assert.equal(client.listenerCount('notification'), 0);
 });
