@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   unit:
+    name: ${{ matrix.node == 22 && format('离线测试（{0}）', matrix.os) || format('离线测试（{0} / Node.js {1}）', matrix.os, matrix.node) }}
     strategy:
       fail-fast: false
       matrix:
@@ -46,3 +47,18 @@ jobs:
       - name: 确认可用浏览器
         run: command -v google-chrome || command -v chromium || command -v chromium-browser
       - run: npm run test:ui
+
+  package:
+    name: 打包 VSIX
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm run package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: humanflow-vsix
+          path: dist/*.vsix
+          retention-days: 7
