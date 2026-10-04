@@ -5,9 +5,10 @@ const t = i18n.t;
 const localizeStatic = i18n.bindStatic(document);
 localizeStatic();
 const workspace = createWorkspace(vscode, i18n);
+const transparencyView = createTransparencyView({ document, vscode, workspace, i18n });
 const confirmationView = createConfirmationView({ document, vscode, workspace, i18n });
 let pendingSubmission, submissionSequence = 0;
-let lastSnapshot, lastProgress, pendingLanguage;
+let lastSnapshot, pendingLanguage;
 let roundStates = [], historyWindow = 20, currentHistory = [], filesSignature;
 get('web-enabled').onchange = () => vscode.postMessage({ type: 'webEnabled', enabled: get('web-enabled').checked });
 get('web-provider').onchange = () => vscode.postMessage({ type: 'webSearchProvider', provider: get('web-provider').value });
@@ -43,7 +44,7 @@ const emptyState = (art, title, body) => {
 };
 const note = (text, className = 'hint') => { const node = document.createElement('p'); node.className = className; node.textContent = text; return node; };
 // 面板脚本每次打开面板都从磁盘读取，可能比正在运行的扩展宿主更新；协议号不一致时明确提示，避免静默走旧行为。
-const PANEL_PROTOCOL = 7;
+const PANEL_PROTOCOL = 8;
 let hostProtocol, protocolMismatch = true;
 const protocolWarning = note('', 'panel-alert'); protocolWarning.id = 'protocol-warning'; protocolWarning.hidden = true;
 get('status').before(protocolWarning);
@@ -126,6 +127,7 @@ const renderHistory = (history, taskId) => {
     };
     if (round.node.open || index >= groups.length - historyWindow) mount();
     round.node.ontoggle = () => { if (round.node.open) mount(); };
+    transparencyView.attachRound(round.node, group.id);
     return round;
   });
   // 兼容历史被裁剪的状态更新。
@@ -490,16 +492,6 @@ get('form').onsubmit = event => {
     vscode.postMessage({ type: 'ask', ...pendingSubmission, intent: get('intent').value, findingIds: workspace.selectedFindings() });
   }
 };
-const renderProgress = data => {
-    get('progress-count').textContent = data.entries.length ? t`（${data.entries.length} 项）` : '';
-    get('progress').replaceChildren(...data.entries.map(entry => {
-      const article = document.createElement('article'), label = document.createElement('strong'), text = document.createElement('pre');
-      article.className = 'progress-entry';
-      label.textContent = i18n.systemText(entry.label); text.textContent = entry.text;
-      article.append(label, text); return article;
-    }));
-    get('progress-panel').hidden = !data.entries.length;
-};
 const renderSnapshot = (data, preserveInputs = false) => {
   data = { ...data, busy: data.busy || data.confirming };
   if (data.protocol !== undefined) hostProtocol = data.protocol;
@@ -511,6 +503,7 @@ const renderSnapshot = (data, preserveInputs = false) => {
   const taskChanged = data.taskId !== historyTaskId;
   if (taskChanged) { historyWindow = 20; filesSignature = undefined; fileIndex = 0; }
   roundStates = data.turns ?? [];
+  transparencyView.render(data);
   lastTurn = roundStates.at(-1);
   const followLatest = taskChanged || conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 80;
   const previousScroll = conversation.scrollTop;
@@ -587,7 +580,6 @@ const changeLanguage = (language, redraw = true) => {
   i18n.setLanguage(language); localizeStatic(); get('ui-language').value = language;
   workspace.refreshLanguage(); confirmationView.refresh();
   if (redraw && lastSnapshot) renderSnapshot(lastSnapshot, true);
-  if (lastProgress) renderProgress(lastProgress);
   for (const [node, value, checked] of inputs) { node.value = value; if (checked !== undefined) node.checked = checked; }
   get('budget-fields').hidden = !get('budget-enabled').checked;
   const nodes = [...document.querySelectorAll('details')];
@@ -603,6 +595,7 @@ get('ui-language').onchange = () => {
   vscode.postMessage({ type: 'uiLanguage', language });
 };
 window.addEventListener('message', ({ data: message }) => {
+  if (transparencyView.handle(message)) return;
   if (confirmationView.handle(message)) return;
   if (['requestStarted', 'requestRejected'].includes(message.type)) {
     if (!pendingSubmission || message.requestId !== pendingSubmission.requestId || message.taskId !== pendingSubmission.taskId) return;
@@ -613,8 +606,7 @@ window.addEventListener('message', ({ data: message }) => {
     pendingSubmission = undefined; if (lastSnapshot) renderSnapshot(lastSnapshot, true); return;
   }
   if (findingsView.handle(message)) return;
-  if (!['snapshot', 'patch', 'progress'].includes(message.type)) return;
-  if (message.type === 'progress') { lastProgress = message; renderProgress(message); return; }
+  if (!['snapshot', 'patch'].includes(message.type)) return;
   const data = workspace.merge(message);
   if (!data) return;
   lastSnapshot = data;

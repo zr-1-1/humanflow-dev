@@ -2,7 +2,7 @@
   "name": "humanflow",
   "displayName": "HumanFlow",
   "description": "Discuss project tasks, focus on code, review proposals, and selectively apply changes across files in VS Code.",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "publisher": "windflowing",
   "icon": "icon.png",
   "categories": [

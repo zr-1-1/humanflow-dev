@@ -42,6 +42,8 @@ exports.run = async () => {
       assert.equal(closed.status, 'resolved');
       assert.equal(closed.statusHistory.at(-1).reason, '宿主重启前确认');
       assert.equal(api.snapshot().task.uiState.findings.view, 'ended');
+      assert.equal(api.snapshot().task.turns.find(turn => turn.id === previous.processTurnId).process.entries.length, 2);
+      previous.passed.push('真实宿主重启后恢复按轮过程与请求组成');
       previous.passed.push('真实扩展进程重启后恢复讨论、应用记录和问题列表，旧候选不可应用');
       writeFileSync(process.env.HUMANFLOW_TEST_REPORT, JSON.stringify(previous, null, 2));
       return;
@@ -53,6 +55,11 @@ exports.run = async () => {
     assert.equal(state.task.focus, null);
     record('无选区创建项目任务并通过真实 stdio 客户端收到跨文件候选');
     const originalTask = state.task.id;
+    const firstProcess = state.task.turns.at(-1).process;
+    assert.equal(firstProcess.status, 'pendingReview');
+    assert.equal(firstProcess.entries.length, 2);
+    assert.doesNotMatch(JSON.stringify(firstProcess), /not archived tool output/);
+    record('真实 stdio 进度归属当前轮，保留公开摘要与命令并排除工具输出');
     await dispatch({ type: 'apply', batchId: state.suggestion.batchId, selection: [[0], []] });
     assert.equal(readFileSync(join(root, 'a.js'), 'utf8'), 'const a = 2;\nconst c = 1;\n');
     assert.equal(readFileSync(join(root, 'b.js'), 'utf8'), 'const b = 1;\n');
@@ -337,7 +344,7 @@ exports.run = async () => {
     await vscode.window.showTextDocument(draft);
     await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
     await api.flush();
-    writeFileSync(process.env.HUMANFLOW_TEST_REPORT, JSON.stringify({ passed: results, previewTabInfo, closedFinding, taskId: originalTask, historyLength: api.snapshot().history.length }, null, 2));
+    writeFileSync(process.env.HUMANFLOW_TEST_REPORT, JSON.stringify({ passed: results, previewTabInfo, closedFinding, taskId: originalTask, processTurnId: api.snapshot().task.turns.at(-1).id, historyLength: api.snapshot().history.length }, null, 2));
   } catch (error) {
     writeFileSync(process.env.HUMANFLOW_TEST_REPORT, JSON.stringify({ passed: results, error: error.stack }, null, 2));
     throw error;

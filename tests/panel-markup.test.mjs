@@ -14,7 +14,7 @@ test('面板标记与设计系统接线保持一致', () => {
   // 由脚本在运行时创建、因此不在静态 HTML 中的容器。
   const runtime = new Set(['history-search', 'search-results', 'view-discuss', 'view-changes', 'view-findings']);
   const missing = [];
-  for (const [file, source] of [['media/panel.js', script], ['media/workspace.js', workspace]]) {
+  for (const [file, source] of [['media/panel.js', script], ['media/workspace.js', workspace], ['media/transparency.js', read('media/transparency.js')]]) {
     for (const match of source.matchAll(/(?:get|el)\(\s*'([\w-]+)'\s*\)/g)) if (!ids.has(match[1]) && !runtime.has(match[1])) missing.push(`${file} → #${match[1]}`);
     for (const match of source.matchAll(/(?:get|el)\(\s*`([\w-]+?)\$\{/g)) {
       const prefix = match[1];

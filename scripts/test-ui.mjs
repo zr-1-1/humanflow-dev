@@ -80,8 +80,16 @@ try {
     ws.addEventListener('open', opened); ws.addEventListener('error', failed); ws.addEventListener('close', failed);
   });
   ws.addEventListener('message', event => { const data = JSON.parse(event.data); const request = pending.get(data.id); if (request) data.error ? request.reject(data.error) : request.resolve(data.result); });
-  const { targetInfos } = await call('Target.getTargets');
-  const { sessionId } = await call('Target.attachToTarget', { targetId: targetInfos.find(x => x.type === 'page').targetId, flatten: true });
+  // 调试端口可先于首个页面就绪，等待页面而不是假定首轮查询一定有结果。
+  let pageTarget;
+  const pageDeadline = Date.now() + 10000;
+  while (!pageTarget && Date.now() < pageDeadline) {
+    const { targetInfos } = await call('Target.getTargets', {}, undefined, Math.max(1, pageDeadline - Date.now()));
+    pageTarget = targetInfos.find(target => target.type === 'page');
+    if (!pageTarget) await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.ok(pageTarget, '等待浏览器页面超时');
+  const { sessionId } = await call('Target.attachToTarget', { targetId: pageTarget.targetId, flatten: true });
   const send = (method, params) => call(method, params, sessionId);
   const evaluate = async expression => {
     const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
@@ -99,12 +107,13 @@ try {
     .replace(/<script[^>]*><\/script>/g, '');
   assert.equal(/\{\{\w+\}\}/.test(html), false, '面板模板占位符未被替换');
   await send('Page.setDocumentContent', { frameId: (await send('Page.getFrameTree')).frameTree.frame.id, html });
-  await evaluate('window.acquireVsCodeApi = () => ({ getState: () => window.saved, setState: value => window.saved = value, postMessage: message => (window.sent ??= []).push(message) });');
+  await evaluate('window.addEventListener("error", event => (window.uiErrors ??= []).push(event.error?.stack ?? event.message)); window.acquireVsCodeApi = () => ({ getState: () => window.saved, setState: value => window.saved = value, postMessage: message => (window.sent ??= []).push(message) });');
   await evaluate(await readFile(root + '/media/i18n.js', 'utf8'));
   await evaluate(await readFile(root + '/media/markdown.js', 'utf8'));
   await evaluate(await readFile(root + '/media/workspace.js', 'utf8'));
   await evaluate(await readFile(root + '/media/confirmation.js', 'utf8'));
   await evaluate(await readFile(root + '/media/findings.js', 'utf8'));
+  await evaluate(await readFile(root + '/media/transparency.js', 'utf8'));
   await evaluate(await readFile(root + '/media/panel.js', 'utf8'));
   const history = Array.from({ length: 100 }, (_, index) => [
     { id: `u${index}`, turnId: String(index + 1), role: '你', text: `请求 ${index + 1}：优化当前项目的交互与 UI` },
@@ -132,7 +141,7 @@ try {
   const oldRequests = await evaluate('window.sent.length');
   await evaluate("document.querySelector('#findings .hf-finding-card__location').click(); document.querySelector('#findings .hf-card__footer button').click(); document.getElementById('discuss-findings').click()");
   assert.equal(await evaluate('window.sent.length'), oldRequests, '旧宿主不能收到不支持的问题操作');
-  state.protocol = 7; await publish();
+  state.protocol = 8; await publish();
   assert.equal(await evaluate("document.getElementById('select-focus-file').disabled"), false);
   await evaluate("document.getElementById('select-focus-file').click()");
   assert.equal(await evaluate("window.sent.at(-1).type"), 'selectFocusFile');
@@ -171,8 +180,9 @@ try {
   await evaluate("document.getElementById('budget-enabled').click()");
   assert.equal(await evaluate("document.getElementById('budget-fields').hidden"), false);
   await evaluate("document.getElementById('budget-enabled').click(); document.getElementById('save-plan').click()");
-  assert.equal(await evaluate('window.sent.at(-1).budget.enabled'), false);
-  assert.equal(await evaluate('window.sent.at(-1).budget.added'), null);
+  // UI 阅读状态可能异步保存，按消息类型检查实际设置提交。
+  assert.equal(await evaluate("window.sent.filter(message => message.type === 'taskSettings').at(-1).budget.enabled"), false);
+  assert.equal(await evaluate("window.sent.filter(message => message.type === 'taskSettings').at(-1).budget.added"), null);
   assert.equal(await evaluate("document.querySelectorAll('.request-round').length"), 100);
   assert.equal(await evaluate("document.querySelectorAll('#outline button').length"), 100);
   assert.equal(await evaluate("document.querySelector('#request-1 article') === null"), true);
@@ -345,7 +355,7 @@ try {
   assert.equal(await evaluate("document.getElementById('question').value"), '忙碌时保留草稿');
   assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), false);
   assert.equal(await evaluate("document.getElementById('discuss-findings').disabled"), true);
-  state.protocol = 7; state.revision++; await publish();
+  state.protocol = 8; state.revision++; await publish();
   assert.equal(await evaluate("document.getElementById('discuss-findings').disabled"), false);
   state.taskId = 'attachment-other'; state.revision++; await publish();
   assert.equal(await evaluate("document.getElementById('finding-attachments').hidden"), true);
@@ -417,9 +427,56 @@ try {
     await evaluate(`document.getElementById('${id}').click()`);
   }
   assert.deepEqual(await evaluate('window.sent.slice(-3).map(message => message.type)'), ['openSettings', 'openUserSettings', 'openWorkspaceSettings']);
+  // 分层透明化：折叠不挂载事件，按轮请求，拒绝旧任务和已结束回合的迟到进度。
+  const priorTurns = state.turns;
+  const processSummary = { count: 1, status: 'running', stage: '等待模型响应', startedAt: Date.now() - 5000, lastEventAt: Date.now(), hasSummary: false, dropped: 2 };
+  state.turns = [{ id: '1', status: 'completed', process: { ...processSummary, status: 'completed' } }, { id: '100', status: 'running', process: processSummary }];
+  state.revision++; await publish();
+  assert.equal(await evaluate("document.querySelectorAll('.round-process .progress-entry').length"), 0);
+  assert.match(await evaluate("document.getElementById('overview-stage').textContent"), /等待模型响应/);
+  await evaluate("document.getElementById('tab-discuss').click(); document.getElementById('request-100').open=true; document.getElementById('process-100').open=true; document.getElementById('process-100').dispatchEvent(new Event('toggle'))");
+  const processRequest = await evaluate("window.sent.filter(message => message.type === 'processDetails').at(-1)");
+  assert.equal(processRequest.turnId, '100'); assert.equal(processRequest.taskId, state.taskId);
+  const processRecord = { type: 'processDetails', taskId: state.taskId, turnId: '100', process: processSummary, context: { characters: 12, files: [{ path: 'src/snapshot.js', source: '编辑器未保存内容', version: 'old-hash' }] }, entries: [{ id: 'cmd', label: '正在执行命令', text: 'rg test src', kind: 'command', status: 'running', at: 1, updatedAt: 2, truncated: true }] };
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(processRecord)}}))`);
+  assert.equal(await evaluate("document.querySelector('#process-100 pre').textContent"), 'rg test src');
+  assert.match(await evaluate("document.querySelector('#process-100 .hint').textContent"), /已省略 2 项/);
+  assert.equal(await evaluate("document.querySelector('#process-100 .progress-entry .hint').hidden"), false);
+  assert.equal(await evaluate("document.querySelectorAll('#process-context-100 li').length"), 0);
+  await evaluate("document.getElementById('process-context-100').open=true; document.getElementById('process-context-100').dispatchEvent(new Event('toggle'))");
+  assert.match(await evaluate("document.getElementById('process-context-100').textContent"), /old-hash/);
+  const reading = await evaluate("JSON.stringify({draft:document.getElementById('question').value,scroll:document.getElementById('conversation').scrollTop})");
+  const updated = { ...processRecord, type: 'progress', process: { ...processSummary, stage: '正在执行命令' }, entries: [{ ...processRecord.entries[0], text: 'rg test src --glob *.js' }] };
+  await evaluate(`window.processNode=document.querySelector('#process-100 .progress-entry'); window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(updated)}}))`);
+  assert.equal(await evaluate("window.processNode === document.querySelector('#process-100 .progress-entry')"), true);
+  assert.equal(await evaluate("JSON.stringify({draft:document.getElementById('question').value,scroll:document.getElementById('conversation').scrollTop})"), reading);
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify({ ...updated, taskId: 'other-task', process: { ...processSummary, stage: '错误任务' } })}}))`);
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify({ ...updated, turnId: '1', process: { ...processSummary, stage: '迟到进度' } })}}))`);
+  assert.equal(await evaluate("document.getElementById('overview-stage').textContent"), '正在执行命令');
+  const requestsBeforePreview = await evaluate("window.sent.filter(message=>message.type==='ask').length");
+  await evaluate("document.getElementById('open-diagnostics').click(); document.getElementById('diagnostic-generate').click()");
+  const diagnosticRequest = await evaluate("window.sent.filter(message=>message.type==='diagnostics').at(-1)");
+  assert.deepEqual(diagnosticRequest.sections, ['process', 'context']); assert.equal(diagnosticRequest.turnId, '100');
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify({ type: 'diagnostics', taskId: state.taskId, turnId: '100', requestId: diagnosticRequest.requestId, text: JSON.stringify({ format: 'humanflow.diagnostics.v1', taskId: state.taskId, turnId: '100', process: '公开事件' }) })}}))`);
+  assert.equal(await evaluate("document.getElementById('diagnostic-save').disabled"), false);
+  await evaluate("document.getElementById('diagnostic-save').click()");
+  assert.equal(await evaluate("window.sent.filter(message=>message.type==='exportDiagnostics').at(-1).turnId"), '100');
+  const exportRequest = await evaluate("window.sent.filter(message=>message.type==='exportDiagnostics').at(-1)");
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify({ ...exportRequest, type: 'diagnosticSaved', saved: false })}}))`);
+  assert.match(await evaluate("document.getElementById('diagnostic-notice').textContent"), /已取消保存/);
+  assert.equal(await evaluate("document.getElementById('diagnostic-save').disabled"), false);
+  await evaluate("document.getElementById('diagnostic-context').click()");
+  assert.equal(await evaluate("document.getElementById('diagnostic-save').disabled"), true);
+  assert.equal(await evaluate("document.getElementById('diagnostic-preview').value"), '');
+  assert.equal(await evaluate("window.sent.filter(message=>message.type==='ask').length"), requestsBeforePreview);
+  await evaluate("document.getElementById('diagnostic-close').click(); document.getElementById('process-100').open=false; document.getElementById('process-100').dispatchEvent(new Event('toggle'))");
+  assert.equal(await evaluate("document.querySelectorAll('#process-100 .progress-entry').length"), 0);
+  assert.equal(await evaluate("window.sent.filter(message=>message.type==='processDetails').at(-1).unsubscribe"), true);
+  state.turns = priorTurns; state.revision++; await publish();
+  console.log('PASS: per-turn details, lazy events, node reuse, late-event isolation, scoped diagnostic preview');
   // 新问题视图：由真实浏览器发送消息，使用领域规则模拟宿主发布更新。
   const owner = normalizeFindings({ id: 'lifecycle', findings: Array.from({ length: 12 }, (_, n) => ({ id: 'issue-' + n, title: '问题 ' + n, evidence: '依据', impact: '影响', path: 'src/item' + n + '.js', line: n + 1, status: n < 10 ? 'resolved' : 'open' })),
-    checks: [{ id: 'linked-check', command: 'echo reviewed', reason: '核对行为', batchId: 'latest' }], validations: [{ id: 'good', command: 'echo good', exitCode: 0, stale: false, at: 1, findingIds: ['issue-11'] }, { id: 'expired', command: 'echo stale', exitCode: 0, stale: true, staleReason: '代码变化', findingIds: ['issue-11'] }] });
+    checks: [{ id: 'linked-check', command: 'echo reviewed', reason: '核对行为', batchId: 'latest' }], validations: [{ id: 'good', command: 'echo good', exitCode: 0, stale: false, at: 1, findingIds: [] }, { id: 'expired', command: 'echo stale', exitCode: 0, stale: true, staleReason: '代码变化', findingIds: ['issue-11'] }] });
   Object.assign(state, { taskId: owner.id, findings: owner.findings, checks: owner.checks, validations: owner.validations, latestCheckBatchId: 'latest', revision: state.revision + 1 });
   await publish();
   const setFilter = async (id, value, event = 'change') => evaluate('document.getElementById(' + JSON.stringify(id) + ').value = ' + JSON.stringify(value) + '; document.getElementById(' + JSON.stringify(id) + ').dispatchEvent(new Event(' + JSON.stringify(event) + '))');
@@ -471,9 +528,28 @@ try {
   assert.equal(await evaluate('window.sent.at(-1).checkId'), 'linked-check');
   await evaluate(`document.getElementById('clear-findings').click(); document.getElementById('choose-issue-11').click(); document.getElementById('close-findings').click()`);
   await evaluate(`document.querySelector('#finding-resolution select[aria-label="确认依据"]').value = 'validation'; document.querySelector('#finding-resolution select[aria-label="确认依据"]').dispatchEvent(new Event('change'))`);
+  assert.equal(await evaluate(`document.querySelectorAll('#finding-resolution input[type=checkbox]').length`), 0, '未关联记录不可直接作为依据');
+  await evaluate(`document.getElementById('finding-note-issue-11').value = '已核对测试覆盖'; document.getElementById('finding-note-issue-11').dispatchEvent(new Event('input')); document.querySelector('#finding-resolution [data-link-validation="good"]').click()`);
+  const linkExisting = await evaluate('window.sent.at(-1)'); assert.equal(linkExisting.type, 'findingEvidence');
+  linkFindingEvidence(owner, linkExisting); state.validations = owner.validations; state.revision++; await publish();
   assert.equal(await evaluate(`document.querySelectorAll('#finding-resolution input[type=checkbox]').length`), 1, '过期记录不能作为有效依据');
-  await evaluate(`document.getElementById('finding-note-issue-11').value = '已核对测试覆盖'; document.getElementById('finding-note-issue-11').dispatchEvent(new Event('input')); document.querySelector('#finding-resolution input').click(); document.querySelector('#finding-resolution .actions button').click()`); await applyTransition();
-  assert.deepEqual(owner.findings[11].statusHistory.at(-1).resolution.validationIds, ['good']);
+  assert.equal(await evaluate(`document.getElementById('finding-note-issue-11').value`), '已核对测试覆盖', '动态依据更新保留填写说明');
+  assert.equal(await evaluate(`document.getElementById('finding-method-issue-11').value`), 'validation');
+  await evaluate(`document.getElementById('finding-validation-issue-11-good').click()`);
+  owner.validations[0].stale = true; owner.validations[0].revision++; state.revision++; await publish();
+  assert.equal(await evaluate(`document.querySelectorAll('#finding-resolution input[type=checkbox]').length`), 0, '表单内已过期的依据立即移除');
+  await evaluate(`document.querySelector('#finding-resolution [data-run-finding-validation="linked-check"]').click()`);
+  const runFromForm = await evaluate('window.sent.at(-1)'); assert.equal(runFromForm.type, 'validate');
+  assert.equal(runFromForm.findingId, 'issue-11'); assert.equal(runFromForm.checkRevision, owner.checks[0].revision);
+  owner.validations.push({ id: 'fresh', revision: 0, command: 'echo reviewed', exitCode: 0, stale: false, findingIds: ['issue-11'] }); state.revision++; await publish();
+  assert.equal(await evaluate(`document.querySelectorAll('#finding-resolution input[type=checkbox]').length`), 1, '运行完成后出现新的可选依据');
+  await evaluate('window.dispatchEvent(new MessageEvent("message", {data:' + JSON.stringify({type:'findingActionError',taskId:owner.id,requestId:runFromForm.requestId,error:'验证记录已变化，请刷新后重试'}) + '}))');
+  assert.match(await evaluate(`document.getElementById('finding-form-error').textContent`), /已变化/);
+  await evaluate(`document.getElementById('finding-validation-issue-11-fresh').click(); document.getElementById('finding-method-issue-11').value='manual'; document.getElementById('finding-method-issue-11').dispatchEvent(new Event('change')); document.getElementById('finding-method-issue-11').value='validation'; document.getElementById('finding-method-issue-11').dispatchEvent(new Event('change'))`);
+  assert.equal(await evaluate(`document.getElementById('finding-validation-issue-11-fresh').checked`), false, '切换回运行验证时勾选与提交依据一致');
+  await evaluate(`document.getElementById('finding-validation-issue-11-fresh').click(); document.querySelector('#finding-resolution .actions button').click()`); await applyTransition();
+  assert.deepEqual(owner.findings[11].statusHistory.at(-1).resolution.validationIds, ['fresh']);
+  console.log('PASS: empty validation evidence can be linked or run from the outcome form; evidence refresh preserves notes and rejects stale records');
   const scale = normalizeFindings({ findings: Array.from({ length: 500 }, (_, n) => ({ id: 'scale-' + n, title: '历史问题 ' + n, evidence: '问题依据'.repeat(40), impact: '影响范围', path: 'src/scale.js', line: n + 1, status: n < 350 ? 'resolved' : n % 2 ? 'pendingVerification' : 'open' })),
     validations: Array.from({ length: 200 }, (_, n) => ({ id: 'scale-validation-' + n, command: 'echo validation-' + n, cwd: '/project', exitCode: n % 3 ? 0 : 1, stale: Boolean(n % 5), at: n, versions: Object.fromEntries(Array.from({ length: 50 }, (_, f) => ['file' + f, 'hash-' + f])) })) });
   Object.assign(state, { taskId: 'scale', findings: scale.findings, validations: scale.validations, checks: owner.checks, revision: state.revision + 1 });
@@ -502,7 +578,7 @@ try {
   await send('Page.navigate', { url: 'about:blank' });
   await send('Page.setDocumentContent', { frameId: (await send('Page.getFrameTree')).frameTree.frame.id, html });
   await evaluate('window.acquireVsCodeApi = () => ({ getState: () => undefined, setState: value => window.saved = value, postMessage: message => (window.sent ??= []).push(message) });');
-  for (const name of ['i18n', 'markdown', 'workspace', 'confirmation', 'findings', 'panel']) await evaluate(await readFile(root + '/media/' + name + '.js', 'utf8'));
+  for (const name of ['i18n', 'markdown', 'workspace', 'confirmation', 'findings', 'transparency', 'panel']) await evaluate(await readFile(root + '/media/' + name + '.js', 'utf8'));
   await evaluate(`window.dispatchEvent(new MessageEvent('message', {data:${JSON.stringify(restored)}}))`);
   assert.equal(await evaluate("document.getElementById('question').value"), '关闭前的草稿');
   assert.equal(await evaluate("document.querySelector('#files input').checked"), true);
@@ -516,6 +592,7 @@ try {
   assert.equal(await evaluate("document.getElementById('send').disabled"), false);
   assert.equal(await evaluate("document.querySelector('#files input').checked"), true);
   console.log('PASS: design system, interaction, safe text, wide/narrow layout, language switching, drafts, selections, finding references, confirmation, page recreation');
+  assert.deepEqual(await evaluate('window.uiErrors ?? []'), [], '面板不能存在未处理的脚本异常');
   console.log(directory);
 } finally {
   if (ws?.readyState === WebSocket.OPEN) await call('Browser.close', {}, undefined, 2000).catch(() => {});

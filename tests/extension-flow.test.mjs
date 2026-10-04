@@ -18,8 +18,8 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
   const disposable = () => ({ dispose() {} });
   const uri = path => ({ scheme: 'file', fsPath: path, toString: () => path });
   const emit = doc => { for (const listener of changes) listener({ document: doc, contentChanges: [{}] }); };
-  let panel, saveFails = false, taskEnded, opened, pickedFiles, pickerOptions, quickPickItems, quickPickIndex = 0;
-  let autoConfirm = true; const messages = [];
+  let panel, saveFails = false, taskEnded, opened, pickedFiles, pickerOptions, quickPickItems, quickPickIndex = 0, diagnosticDestination;
+  let autoConfirm = true, confirmValidation = true; const messages = [];
   const decide = accepted => api.dispatch({ ...api.snapshot().confirmation, type: 'confirmationResult', accepted, dontAskAgain: false });
   const vscode = {
     Uri: { file: uri, joinPath: (base, path) => uri(join(base.fsPath, path)) },
@@ -33,6 +33,7 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
     },
     WorkspaceEdit: class { edits = []; replace(uri, range, text) { this.edits.push({ uri, text }); } },
     workspace: {
+      fs: { async writeFile(destination, bytes) { await writeFile(destination.fsPath, bytes); } },
       isTrusted: true, workspaceFolders: [{ uri: uri(root) }],
       get textDocuments() { return [...docs.values()]; },
       getWorkspaceFolder: () => ({ uri: uri(root) }),
@@ -57,8 +58,9 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
       visibleTextEditors: [],
       onDidChangeActiveTextEditor(listener) { editorChanges.add(listener); return { dispose: () => editorChanges.delete(listener) }; },
       async showOpenDialog(options) { pickerOptions = options; return pickedFiles; },
+      async showSaveDialog() { return diagnosticDestination; },
       async showQuickPick(items) { quickPickItems = items; return items[quickPickIndex]; },
-      async showWarningMessage(text) { return text.startsWith('运行验证命令') ? '运行' : '删除记录'; },
+      async showWarningMessage(text) { return text.startsWith('运行验证命令') ? (confirmValidation ? '运行' : undefined) : '删除记录'; },
       async showInputBox() { return 'humanflow-secret-test'; },
       async showTextDocument(document, options) { opened = { document, options }; },
       createWebviewPanel() {
@@ -98,6 +100,23 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
     let state = api.snapshot();
     assert.ok(state.suggestion, state.status);
     const id = state.task.id;
+    const processTurnId = state.task.turns.at(-1).id;
+    await api.dispatch({ type: 'ready' });
+    assert.equal(messages.filter(message => message.type === 'snapshot').at(-1).turns.at(-1).process.entries, undefined, '默认快照不全量发送事件');
+    await api.dispatch({ type: 'processDetails', taskId: id, turnId: processTurnId });
+    assert.equal(messages.filter(message => message.type === 'processDetails').at(-1).entries.length, 2);
+    const messageCount = messages.length;
+    await api.dispatch({ type: 'processDetails', taskId: 'other', turnId: processTurnId });
+    assert.equal(messages.length, messageCount, '其他任务不能读取过程');
+    await api.dispatch({ type: 'diagnostics', taskId: id, turnId: processTurnId, sections: ['process'], requestId: 'preview' });
+    const diagnosticText = messages.filter(message => message.type === 'diagnostics').at(-1).text;
+    assert.equal(JSON.parse(diagnosticText).context, undefined);
+    diagnosticDestination = uri(join(root, 'humanflow-diagnostics.json'));
+    const diagnostic = JSON.parse(diagnosticText); diagnostic.note = 'Bearer private-diagnostic-value';
+    await api.dispatch({ type: 'exportDiagnostics', taskId: id, turnId: processTurnId, text: JSON.stringify(diagnostic) });
+    const exported = JSON.parse(await readFile(diagnosticDestination.fsPath, 'utf8'));
+    assert.equal(exported.note, 'Bearer [已遮盖]');
+    assert.equal(api.snapshot().task.turns.length, 1, '回查、预览和保存不创建模型回合');
     const waitFor = async predicate => { for (let n = 0; n < 200; n++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); } throw Error('等待状态超时'); };
     const protectedBatch = state.suggestion.batchId;
     const protectedDoc = docs.get(join(root, 'a.js'));
@@ -259,10 +278,21 @@ test('持续任务：应用、保存失败、人工修改、取消、过期、�
     await doc.save();
     const first = () => api.snapshot().task.findings.find(item => item.id === multi[0].id);
     let check = api.snapshot().task.checks.at(-1);
-    await api.dispatch({ type: 'findingEvidence', taskId: id, kind: 'check', id: check.id, revision: check.revision, findingIds: multi.map(item => item.id) });
-    await api.dispatch({ type: 'validate', checkId: check.id });
+    const previousRuns = api.snapshot().task.validations.length;
+    await api.dispatch({ type: 'validate', taskId: id, requestId: 'form-stale-check', checkId: check.id, checkRevision: -1, findingId: first().id, findingRevision: first().revision });
+    assert.equal(api.snapshot().task.validations.length, previousRuns, '旧版本命令不能执行');
+    assert.equal(messages.filter(message => message.type === 'findingActionError').at(-1).requestId, 'form-stale-check');
+    confirmValidation = false;
+    await api.dispatch({ type: 'validate', taskId: id, requestId: 'form-cancel', checkId: check.id, checkRevision: check.revision, findingId: first().id, findingRevision: first().revision });
+    assert.equal(api.snapshot().task.validations.length, previousRuns, '取消原生确认不执行命令，也不补造依据');
+    assert.deepEqual(api.snapshot().task.checks.at(-1).findingIds, []);
+    confirmValidation = true;
+    await api.dispatch({ type: 'validate', taskId: id, requestId: 'form-run', checkId: check.id, checkRevision: check.revision, findingId: first().id, findingRevision: first().revision });
     validation = api.snapshot().task.validations.at(-1);
-    assert.deepEqual(validation.findingIds, multi.map(item => item.id));
+    assert.deepEqual(validation.findingIds, [first().id]);
+    assert.deepEqual(api.snapshot().task.checks.at(-1).findingIds, [], '表单显式关联本次运行，不改变原建议关联');
+    await api.dispatch({ type: 'findingEvidence', taskId: id, kind: 'validation', id: validation.id, revision: validation.revision, findingIds: multi.map(item => item.id) });
+    validation = api.snapshot().task.validations.at(-1);
     assert.equal(first().status, 'deferred', '成功验证不能自动解决问题');
     const close = { type: 'findingTransition', taskId: id, requestId: 'close', updates: [{ id: first().id, revision: first().revision, status: 'resolved', method: 'validation', validationIds: [validation.id], note: '已核对关联测试与行为' }] };
     await api.dispatch(close); assert.equal(first().status, 'resolved', api.snapshot().status);
