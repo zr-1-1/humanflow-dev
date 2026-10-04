@@ -109,8 +109,11 @@ function createWorkspace(api, i18n) {
   };
   el('feedback-text').oninput = () => { feedback = ''; el('send-feedback').disabled = true; };
   el('send-feedback').onclick = () => { if (feedback) send({ type: 'feedback', id: el('feedback-record').value, text: feedback }); };
-  function quote(entry, prefix, intent) {
-    el('question').value = t`${prefix}（引用轮次 ${entry.turnId ?? t('旧记录')} / 消息 ${entry.id ?? ''}）：\n${entry.text.slice(0, 8000)}\n\n`;
+  function quote(entry, prefix, intent, append = false) {
+    const quoted = t`${prefix}（引用轮次 ${entry.turnId ?? t('旧记录')} / 消息 ${entry.id ?? ''}）：\n${entry.text.slice(0, 8000)}\n\n`;
+    const next = append && el('question').value.trim() ? el('question').value + '\n\n' + quoted : quoted;
+    if (next.length > 12000) { el('status').textContent = t('引用后草稿超过 12000 字符，请先精简草稿；原内容已保留。'); return; }
+    el('question').value = next;
     el('intent').value = intent; saveDraft(); el('question').focus();
   }
   const selectedFindings = () => (ui.findingIds ?? []).filter(id => (data.findings ?? []).some(item => item.id === id));
@@ -118,6 +121,7 @@ function createWorkspace(api, i18n) {
     const selected = selectedFindings().map(id => data.findings.find(item => item.id === id));
     el('finding-attachments').hidden = !selected.length;
     el('finding-attachment-label').textContent = t`引用 ${selected.length} 个问题：${selected.map(item => item.title).join('；')}`;
+    el('finding-attachment-label').title = el('finding-attachment-label').textContent;
   }
   function discussFindings(ids) {
     const combined = [...new Set([...selectedFindings(), ...ids])];
@@ -166,7 +170,7 @@ function createWorkspace(api, i18n) {
     if (data.budget?.enabled) plan.push(t('已限制修改范围'));
     if (data.threadMode === 'continuous') plan.push(t('持续线程'));
     el('plan-summary').textContent = plan.length ? `（${plan.join(' · ')}）` : '';
-    for (const id of ['save-plan', 'add-decision', 'compact-thread', 'reset-thread']) el(id).disabled = data.busy || data.loadingModels || data.confirming || data.protocol !== 7;
+    for (const id of ['save-plan', 'add-decision', 'compact-thread', 'reset-thread']) el(id).disabled = data.busy || data.loadingModels || data.confirming || data.protocol !== 8;
     el('compact-thread').disabled ||= data.threadMode !== 'continuous';
     if (data.busy) el('send-feedback').disabled = true;
     el('decisions').replaceChildren(...(data.decisions ?? []).map(item => {

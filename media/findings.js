@@ -19,7 +19,7 @@ const HumanFlowFindingView = (() => {
   function create({ document: doc, vscode, workspace, i18n, chip, actionButton, emptyState, note }) {
     const get = id => doc.getElementById(id), t = i18n.t;
     let data = {}, taskId, selected = new Set(), filters = {}, form, notice, sequence = 0, signature, evidenceSignature;
-    const disabled = () => data.busy || data.loadingModels || data.confirming || data.protocol !== 7;
+    const disabled = () => data.busy || data.loadingModels || data.confirming || data.protocol !== 8;
     const send = message => vscode.postMessage({ ...message, taskId });
     const label = item => t((statuses.find(([key]) => key === item.status) ?? [item.status, item.status])[1]);
     const stamp = value => value ? new Date(value).toLocaleString(i18n.language === 'en' ? 'en' : 'zh-CN') : t('未记录时间');
@@ -48,11 +48,15 @@ const HumanFlowFindingView = (() => {
     function drawForm() {
       const root = get('finding-resolution'); root.hidden = !form;
       if (!form) { root.replaceChildren(); return; }
-      if (form.language === i18n.language) {
+      const fingerprint = JSON.stringify([i18n.language, data.validations, data.checks, data.latestCheckBatchId,
+        form.entries.map(entry => [entry.id, entry.status, entry.action])]);
+      if (form.signature === fingerprint) {
         for (const node of root.querySelectorAll('button, input, select, textarea')) node.disabled = disabled() || node.dataset.fixed === 'true';
         return;
       }
-      form.language = i18n.language;
+      form.signature = fingerprint;
+      const focused = root.contains(doc.activeElement) ? doc.activeElement : null;
+      const focusId = focused?.id, selection = focused?.tagName === 'TEXTAREA' ? [focused.selectionStart, focused.selectionEnd] : null;
       const heading = doc.createElement('h4'); heading.textContent = t`确认处理 ${form.entries.length} 个问题`;
       root.replaceChildren(heading);
       for (const entry of form.entries) {
@@ -68,22 +72,52 @@ const HumanFlowFindingView = (() => {
         text.oninput = () => { entry.note = text.value; };
         section.append(title, status, textLabel, text);
         if (entry.status === 'resolved' && entry.action !== 'retain') {
-          const method = doc.createElement('select'); method.setAttribute('aria-label', t('确认依据'));
+          const method = doc.createElement('select'); method.id = `finding-method-${entry.id}`; method.setAttribute('aria-label', t('确认依据'));
           for (const [value, text] of [['', '请选择确认依据'], ['manual', '仅人工核对'], ['validation', '结合运行验证']]) {
             const option = doc.createElement('option'); option.value = value; option.textContent = t(text); method.append(option);
           }
           method.value = entry.method;
           const evidence = doc.createElement('div'); evidence.hidden = entry.method !== 'validation';
           const records = (data.validations ?? []).filter(record => record.exitCode === 0 && !record.cancelled && !record.stale && record.findingIds?.includes(entry.id));
+          entry.validationIds = entry.validationIds.filter(id => records.some(record => record.id === id));
           evidence.append(note(t('成功退出码仅作为证据，是否解决由你确认。')));
-          if (!records.length) evidence.append(note(t('暂无已关联且未过期的成功验证，可选择仅人工核对。')));
+          if (!records.length) evidence.append(note(t('暂无可选依据。可关联已有成功记录，或核对命令后运行验证；也可选择仅人工核对。')));
           for (const record of records) {
             const row = doc.createElement('label'); row.className = 'hf-check';
-            const box = doc.createElement('input'); box.type = 'checkbox'; box.checked = entry.validationIds.includes(record.id);
+            const box = doc.createElement('input'); box.id = `finding-validation-${entry.id}-${record.id}`; box.type = 'checkbox'; box.checked = entry.validationIds.includes(record.id);
             box.onchange = () => { entry.validationIds = box.checked ? [...entry.validationIds, record.id] : entry.validationIds.filter(id => id !== record.id); };
             row.append(box, doc.createTextNode(`${record.command} · ${stamp(record.at)} · ${record.cwd ?? t('未记录工作目录')} · ${i18n.systemText(record.coverage ?? '')}`)); evidence.append(row);
           }
-          method.onchange = () => { entry.method = method.value; evidence.hidden = method.value !== 'validation'; if (entry.method === 'manual') entry.validationIds = []; };
+          const unlinked = (data.validations ?? []).filter(record => record.exitCode === 0 && !record.cancelled && !record.stale && !record.findingIds?.includes(entry.id)).slice().reverse().slice(0, 50);
+          if (unlinked.length) {
+            const details = doc.createElement('details'), summary = doc.createElement('summary'); summary.textContent = t('关联已有成功验证');
+            details.append(summary, note(t('请先确认该命令实际覆盖此问题；关联后才能勾选为解决依据。')));
+            for (const record of unlinked) {
+              const link = actionButton(t('确认覆盖并关联'), 'ghost'); link.dataset.linkValidation = record.id;
+              link.onclick = () => send({ type: 'findingEvidence', requestId: form.requestId, kind: 'validation', id: record.id, revision: record.revision ?? 0,
+                findingIds: [...new Set([...(record.findingIds ?? []), entry.id])] });
+              details.append(note(`${record.command} · ${stamp(record.at)} · ${record.cwd ?? t('未记录工作目录')}`), link);
+            }
+            evidence.append(details);
+          }
+          const latest = data.latestCheckBatchId ?? data.checks?.at(-1)?.batchId;
+          const checks = (data.checks ?? []).filter(check => check.batchId === latest || check.findingIds?.includes(entry.id)).slice().reverse().slice(0, 50);
+          const reruns = (data.validations ?? []).filter(record => record.findingIds?.includes(entry.id) && (record.stale || record.cancelled || record.exitCode !== 0)).slice().reverse().slice(0, 50);
+          if (checks.length || reruns.length) {
+            const details = doc.createElement('details'), summary = doc.createElement('summary'); summary.textContent = t('核对并运行验证');
+            details.append(summary, note(t('以下操作会关联此问题并申请运行具体命令；验证成功后仍需勾选记录并确认解决。')));
+            for (const [kind, candidates] of [['check', checks], ['validation', reruns]]) for (const record of candidates) {
+              const run = actionButton(t(kind === 'check' ? '关联此问题并运行' : '关联此问题并重跑'), 'secondary'); run.dataset.runFindingValidation = record.id;
+              run.onclick = () => send({ type: 'validate', requestId: form.requestId, findingId: entry.id, findingRevision: entry.revision,
+                ...(kind === 'check' ? { checkId: record.id, checkRevision: record.revision ?? 0 } : { validationId: record.id, validationRevision: record.revision ?? 0 }) });
+              details.append(note(`${record.command} · ${kind === 'check' ? record.reason ?? '' : i18n.systemText(record.staleReason ?? '')}`), run);
+            }
+            evidence.append(details);
+          } else if (!records.length && !unlinked.length) evidence.append(note(t('尚无建议验证命令。可先讨论此问题获取验证建议，或人工核对后记录结果。')));
+          method.onchange = () => {
+            entry.method = method.value; evidence.hidden = method.value !== 'validation';
+            if (entry.method === 'manual') { entry.validationIds = []; for (const box of evidence.querySelectorAll('input[type=checkbox]')) box.checked = false; }
+          };
           section.append(method, evidence);
         }
         root.append(section);
@@ -99,7 +133,11 @@ const HumanFlowFindingView = (() => {
       };
       const cancel = actionButton(t('取消编辑'), 'ghost'); cancel.onclick = () => { form = null; drawForm(); };
       const error = doc.createElement('p'); error.id = 'finding-form-error'; error.setAttribute('role', 'alert');
+      error.textContent = i18n.systemText(form.error ?? '');
       actions.append(confirm, cancel); root.append(error, actions);
+      for (const node of root.querySelectorAll('button, input, select, textarea')) node.disabled = disabled() || node.dataset.fixed === 'true';
+      const restoredFocus = focusId && get(focusId);
+      if (restoredFocus && !restoredFocus.disabled) { restoredFocus.focus({ preventScroll: true }); if (selection) restoredFocus.setSelectionRange(...selection); }
     }
     function drawNotice() {
       const root = get('finding-undo'); root.replaceChildren(); root.hidden = !notice;
@@ -278,6 +316,12 @@ const HumanFlowFindingView = (() => {
       draw();
     }
     function handle(message) {
+      if (message.type === 'findingActionError') {
+        if (message.taskId === taskId && form?.requestId === message.requestId) {
+          form.error = message.error; get('finding-form-error').textContent = i18n.systemText(message.error);
+        }
+        return true;
+      }
       if (message.type !== 'findingTransitionComplete' || message.taskId !== taskId) return false;
       if (form?.requestId === message.requestId) form = null;
       notice = message.records; signature = null; draw(); get('finding-view').focus({ preventScroll: true }); return true;

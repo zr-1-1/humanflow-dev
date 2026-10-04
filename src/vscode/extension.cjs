@@ -4,7 +4,7 @@ const { join, resolve, basename, extname } = require('node:path');
 const { readFileSync, realpathSync } = require('node:fs');
 const { randomBytes } = require('node:crypto');
 // 面板 JS 每次打开面板都从磁盘读取，可能比正在运行的扩展宿主更新；用协议号识别这种不一致。
-const PANEL_PROTOCOL = 7;
+const PANEL_PROTOCOL = 8;
 // 开发者指令变化后重建持久线程，避免继续使用旧审查规则。
 const SUGGESTION_POLICY_VERSION = 1;
 let shutdown = async () => {};
@@ -20,19 +20,24 @@ exports.activate = async context => {
   const { createLocalClient } = await load('src/codex/local-client.mjs');
   const { startSuggestionSession, runSuggestionTurn: requestSuggestionTurn } = await load('src/codex/suggestion-session.mjs');
   const { createWebTools, publicUrl } = await load('src/codex/web-tools.mjs');
+  const { beginProcess, updateProcess, finishProcess, boundProcesses, processSummary, diagnosticRecord, redactDiagnostic } = await load('src/vscode/turn-process.mjs');
   let failedResponse;
-  let progressEntries = [];
+  const processViews = new Set();
   const runSuggestionTurn = async (client, threadId, prompt, options) => {
     failedResponse = undefined;
-    progressEntries = [];
-    let progressTimer;
+    const owner = options.processOwner, ownerTurn = options.processTurn;
+    let progressTimer, saveTimer;
     const flushProgress = () => {
       clearTimeout(progressTimer); progressTimer = undefined;
-      panel?.webview.postMessage({ type: 'progress', entries: progressEntries });
+      if (!owner || task !== owner || !ownerTurn.process) return;
+      panel?.webview.postMessage({ type: 'progress', taskId: owner.id, turnId: ownerTurn.id, process: processSummary(ownerTurn.process),
+        ...(processViews.has(ownerTurn.id) ? { entries: ownerTurn.process.entries } : {}) });
     };
-    const onProgress = entries => {
-      progressEntries = entries;
+    const onProgress = (entries, meta) => {
+      if (!owner || task !== owner) return;
+      updateProcess(owner, ownerTurn, entries, meta);
       progressTimer ??= setTimeout(flushProgress, 100);
+      saveTimer ??= setTimeout(() => { saveTimer = undefined; publish(); }, 1000);
     };
     onProgress([]);
     const timeouts = timeoutSettings();
@@ -44,7 +49,7 @@ exports.activate = async context => {
         error.message += '。可执行“HumanFlow: 查看最近失败响应”检查原文';
       }
       throw error;
-    } finally { flushProgress(); }
+    } finally { clearTimeout(saveTimer); flushProgress(); }
   };
   const { captureBuffer } = await load('src/vscode/selection.mjs');
   const { prepareBatch, assertBatchCurrent, batchChanges, assertAbsent, candidateChangePage, changePageComment, identifierSpans, supportsIdentifierSpans } = await load('src/codex/change-batch.mjs');
@@ -62,6 +67,7 @@ exports.activate = async context => {
   const roots = () => (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file').map(folder => folder.uri.fsPath);
   let tasks = context.workspaceState.get(STORAGE_KEY, []).map(value => restoreTask(value, roots())).filter(Boolean).map(normalizeTask);
   for (const restored of tasks) {
+    boundProcesses(restored, { restart: true });
     for (const turn of restored.turns) if (turn.status === 'running') turn.status = 'cancelled';
     markValidationsStale(restored, '扩展重启后需重新核对');
     for (const batch of restored.batches) if (batch.status === 'pendingReview') batch.status = 'stale';
@@ -251,7 +257,6 @@ exports.activate = async context => {
   let published, messageRevision = 0, savedSignature;
   const publish = (force = false) => {
     if (task) normalizeTask(task);
-    panel?.webview.postMessage({ type: 'progress', entries: progressEntries });
     state.history = task?.history ?? [];
     state.scope = task?.focus ? task.focus.path + (task.focus.start ? `:${task.focus.start}-${task.focus.end}` : '（文件关注点）') : task?.root ?? '';
     state.selected = task?.focus?.selected ?? '';
@@ -270,10 +275,12 @@ exports.activate = async context => {
       });
       }
     }
-    const next = { protocol: PANEL_PROTOCOL, confirming: Boolean(confirmations.pending), uiLanguage, ...state, uiState: task?.uiState ?? {}, turns: task?.turns ?? [], batches: task?.batches ?? [], validations: task?.validations ?? [], goal: task?.goal ?? '', decisions: task?.decisions ?? [], budget: task?.budget, threadMode: task?.threadMode, contextDetails: task?.contextDetails ?? null, harness: task?.harness ?? null, draft: task?.draft ?? '', taskId: task?.id, webEnabled: task?.webEnabled === true, webSearchProvider: task?.webSearchProvider ?? 'duckduckgo', provider, latestCheckBatchId: task?.latestCheckBatchId, findings: task?.findings ?? [], checks: task?.checks ?? [], taskTitle: task?.title, focusPath: task?.focus?.path, busy: busy || navigating || closingPanel, models, choice, loadingModels };
+    const turns = (task?.turns ?? []).map(({ process, ...turn }) => ({ ...turn, process: processSummary(process) }));
+    const next = { protocol: PANEL_PROTOCOL, confirming: Boolean(confirmations.pending), uiLanguage, ...state, uiState: task?.uiState ?? {}, turns, batches: task?.batches ?? [], validations: task?.validations ?? [], goal: task?.goal ?? '', decisions: task?.decisions ?? [], budget: task?.budget, threadMode: task?.threadMode, contextDetails: task?.contextDetails ?? null, harness: task?.harness ?? null, draft: task?.draft ?? '', taskId: task?.id, webEnabled: task?.webEnabled === true, webSearchProvider: task?.webSearchProvider ?? 'duckduckgo', provider, latestCheckBatchId: task?.latestCheckBatchId, findings: task?.findings ?? [], checks: task?.checks ?? [], taskTitle: task?.title, focusPath: task?.focus?.path, focusRange: task?.focus?.start ? { start: task.focus.start, end: task.focus.end } : null, busy: busy || navigating || closingPanel, models, choice, loadingModels };
     const changed = {};
     for (const [key, value] of Object.entries(next)) if (!published || JSON.stringify(value) !== JSON.stringify(published[key])) changed[key] = value;
     const full = force || !published || published.taskId !== next.taskId;
+    if (published?.taskId !== next.taskId) processViews.clear();
     panel?.webview.postMessage({ type: full ? 'snapshot' : 'patch', revision: ++messageRevision, ...(full ? next : changed) });
     published = structuredClone(next);
   };
@@ -422,6 +429,7 @@ exports.activate = async context => {
     const turnGeneration = generation;
     const assertFresh = () => { if (controller.signal.aborted || generation !== turnGeneration) throw new Error('请求已取消或项目编辑状态变化'); };
     const round = startTurn(task, question);
+    beginProcess(task, round);
     round.intent = intent;
     task.draft = ''; task.updatedAt = Date.now();
     const sessionKey = JSON.stringify([SUGGESTION_POLICY_VERSION, task.id, task.root, provider, turnChoice.model, turnChoice.effort, task.webEnabled]);
@@ -469,6 +477,7 @@ exports.activate = async context => {
       }
       assertFresh();
       if (!client) {
+        round.process.stage = '连接模型服务'; publish();
         const cwd = task.root;
         client = await connect(cwd);
         client.on('notification', event => {
@@ -496,12 +505,15 @@ exports.activate = async context => {
       const requestContext = buildContext(task, question, buffers, 24000, { continuous: resumed, findingIds });
       const payload = JSON.parse(requestContext.prompt); payload.intent = intent;
       requestContext.prompt = JSON.stringify(payload);
-      task.contextDetails = { ...requestContext.details, characters: requestContext.prompt.length, thread: resumed ? '复用 / 恢复' : '新建', threadId };
+      task.contextDetails = { ...requestContext.details, characters: requestContext.prompt.length, thread: resumed ? '复用 / 恢复' : '新建', threadId,
+        focus: snapshot ? { path: snapshot.path, start: snapshot.start, end: snapshot.end, version: contentVersion(snapshot.text), source: '发送时的编辑器内容' } : null };
+      round.process.context = task.contextDetails; round.process.stage = '等待模型响应'; boundProcesses(task);
       task.history.push({ role: '上下文', text: `本轮${task.contextDetails.thread}；省略 ${requestContext.omitted} 条历史，同步 ${buffers.length} 个当前缓冲区。` });
       if (continuous) task.session = { key: sessionKey, id: threadId };
       publish();
       assertFresh();
-      const suggestion = await runSuggestionTurn(client, threadId, requestContext.prompt, { signal: controller.signal, ...turnChoice });
+      const suggestion = await runSuggestionTurn(client, threadId, requestContext.prompt, { signal: controller.signal, ...turnChoice, processOwner: task, processTurn: round });
+      round.process.stage = '校验候选'; publish();
       await check();
       assertFresh();
       const root = task.root;
@@ -530,6 +542,7 @@ exports.activate = async context => {
       // 响应含非法 JSON 转义时已在解析层规范化；把数量带到面板，避免静默改写。
       if (suggestion.repairs) state.suggestion.repairs = suggestion.repairs;
       round.status = batch.length ? 'pendingReview' : 'completed'; round.batchId = state.suggestion.batchId;
+      round.resultSummary = suggestion.summary.slice(0, 500);
       task.batches.push({ id: state.suggestion.batchId, turnId: round.id, summary: suggestion.summary, changes: batchChanges(batch), status: round.status });
       addChecks(task, suggestion.checks, { batchId: state.suggestion.batchId, turnId: round.id });
       state.history.push({ role: `AI · ${turnChoice.model} · ${turnChoice.effort ?? '默认强度'}`, text: `${suggestion.summary}\n\n${suggestion.explanation}\n\n验证说明：${suggestion.verification}` });
@@ -545,6 +558,7 @@ exports.activate = async context => {
       round.status = controller.signal.aborted ? 'cancelled' : 'failed'; task.session = null;
       await resetClient();
     } finally {
+      finishProcess(task, round, round.status);
       if (!continuous) await resetClient();
       busy = false;
       publish();
@@ -692,18 +706,30 @@ exports.activate = async context => {
     const round = task.turns.find(item => item.id === state.suggestion.turnId); if (round) round.batchId = state.suggestion.batchId;
     drafts.clear(); state.status = '草稿已采用，该文件合并为一个可接受片段；请重新勾选和预览。'; publish();
   };
-  const validate = async (index, checkId, validationId) => {
+  const validate = async (index, checkId, validationId, findingRequest) => {
+    let findingPath;
     const latestChecks = (task?.checks ?? []).filter(item => item.batchId === task.latestCheckBatchId);
     const previous = validationId && task?.validations.find(item => item.id === validationId);
     if (validationId && (!previous || previous.cwd !== task.root)) throw new Error('历史验证不属于当前项目，无法重跑');
     let check = previous ? task.checks.find(item => item.id === previous.checkId) : checkId ? task?.checks.find(item => item.id === checkId) : latestChecks[index];
     if (previous) check = { ...check, command: previous.command, reason: '重新核对历史验证', findingIds: [...(previous.findingIds ?? [])], batchId: previous.batchId, turnId: previous.turnId };
-    if (busy || loadingModels || !check) return;
+    if (busy || loadingModels) return;
+    if (!check) { if (findingRequest?.findingId) throw new Error('验证记录已变化，请刷新后重试'); return; }
+    if (findingRequest?.findingId) {
+      if (findingRequest.taskId !== task.id) throw new Error('操作属于其他任务，已忽略');
+      const finding = task.findings.find(item => item.id === findingRequest.findingId);
+      if (!finding || finding.revision !== findingRequest.findingRevision || isClosedFinding(finding)) throw new Error('问题记录已变化，请刷新后重试');
+      if ((previous ? previous.revision !== findingRequest.validationRevision : check.revision !== findingRequest.checkRevision)) throw new Error('验证记录已变化，请刷新后重试');
+      findingPath = resolve(task.root, finding.path);
+      // 用户在问题表单中显式选择命令；只将本次运行结果关联该问题，不推断测试覆盖。
+      check = { ...check, findingIds: [...new Set([...(check.findingIds ?? []), finding.id])],
+        reason: t`关联问题 ${`F-${String(finding.displayNumber).padStart(3, '0')} · ${finding.title}`}；请核对命令覆盖范围。${check.reason ?? ''}` };
+    }
     if (!check.id) { check.id = randomBytes(12).toString('hex'); check.revision = 0; task.checks.push(check); }
     busy = true; publish();
     try {
       const revision = generation;
-      const paths = [...task.tracked, ...batch.map(file => file.path), ...references];
+      const paths = [...new Set([...task.tracked, ...batch.map(file => file.path), ...references, ...(findingPath ? [findingPath] : [])])];
       const versions = await captureVersions(paths, readText);
       const dirty = vscode.workspace.textDocuments.some(doc => doc.isDirty && doc.uri.scheme === 'file' && inside(task.root, doc.uri.fsPath));
       const result = await runValidation(vscode, task.root, check, execution => { validationExecution = execution; }, t);
@@ -798,6 +824,7 @@ exports.activate = async context => {
   }));
   const dispatch = async message => {
     if (!vscode.workspace.isTrusted) return;
+    if (['processDetails', 'diagnostics', 'exportDiagnostics'].includes(message.type) && message.taskId !== task?.id) return;
     const navigation = ['newTask', 'restoreTask', 'deleteTask', 'bind', 'selectFocusFile', 'provider'].includes(message.type);
     if (((confirmations.pending || closingPanel) && !['confirmationResult', 'ready', 'draft', 'uiState', 'uiLanguage'].includes(message.type))
       || (navigating && !['cancel', 'ready', 'confirmationResult', 'draft', 'uiState', 'uiLanguage'].includes(message.type))) {
@@ -808,6 +835,32 @@ exports.activate = async context => {
     try {
       if (message.taskId && message.taskId !== task?.id) throw new Error('操作属于其他任务，已忽略');
       if (message.type === 'ready') { publish(true); confirmations.announce(); }
+      else if (message.type === 'processDetails') {
+        if (!task || typeof message.turnId !== 'string') return;
+        const round = task.turns.find(item => item.id === message.turnId);
+        if (!round) throw new Error('过程记录不存在');
+        if (message.unsubscribe) { processViews.delete(message.turnId); return; }
+        processViews.add(message.turnId);
+        panel?.webview.postMessage({ type: 'processDetails', taskId: task.id, turnId: round.id, process: processSummary(round.process),
+          entries: round.process?.entries ?? [], context: round.process?.context ?? null, unavailable: round.processUnavailable ?? (!round.process ? 'legacy' : null) });
+      }
+      else if (message.type === 'diagnostics') {
+        if (!task) return;
+        const text = JSON.stringify(diagnosticRecord(task, message.turnId, message.sections), null, 2);
+        panel?.webview.postMessage({ type: 'diagnostics', taskId: task.id, turnId: message.turnId, requestId: message.requestId, text });
+      }
+      else if (message.type === 'exportDiagnostics') {
+        if (!task || !task.turns.some(round => round.id === message.turnId) || typeof message.text !== 'string' || Buffer.byteLength(message.text, 'utf8') > 350000) throw new Error('诊断范围无效');
+        const preview = JSON.parse(message.text);
+        if (preview.format !== 'humanflow.diagnostics.v1' || preview.taskId !== task.id || preview.turnId !== message.turnId) throw new Error('诊断范围无效');
+        const ownerId = task.id;
+        const destination = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(join(task.root, 'humanflow-diagnostics.json')), filters: { JSON: ['json'] }, saveLabel: t('保存诊断预览') });
+        if (destination) {
+          if (destination.scheme !== 'file' || extname(destination.fsPath).toLowerCase() !== '.json') throw new Error('诊断导出仅支持本地 JSON 文件');
+          await vscode.workspace.fs.writeFile(destination, Buffer.from(JSON.stringify(redactDiagnostic(preview), null, 2), 'utf8'));
+        }
+        panel?.webview.postMessage({ type: 'diagnosticSaved', taskId: ownerId, turnId: message.turnId, requestId: message.requestId, saved: Boolean(destination) });
+      }
       else if (message.type === 'confirmationResult') await confirmations.respond(message);
       else if (message.type === 'closePanel') await closePanel();
       else if (message.type === 'resetConfirmations') { await confirmations.reset(); state.status = '操作确认提示已恢复。'; publish(); }
@@ -924,7 +977,7 @@ exports.activate = async context => {
       else if (message.type === 'deleteTask') await deleteTask();
       else if (message.type === 'editDraft') await editDraft(message);
       else if (message.type === 'useDraft') await useDraft(message);
-      else if (message.type === 'validate') await validate(message.index, message.checkId, message.validationId);
+      else if (message.type === 'validate') await validate(message.index, message.checkId, message.validationId, message);
       else if (message.type === 'review') await review(message);
       else if (message.type === 'findingStatus') {
         if (busy || loadingModels) return;
@@ -983,6 +1036,13 @@ exports.activate = async context => {
       else if (message.type === 'preview') await preview(message.index, message.selection, message.batchId, message.mode === 'unified' ? 'unified' : 'diff');
       else if (message.type === 'apply') await apply(message);
     } catch (error) {
+      if (['findingTransition', 'findingEvidence', 'validate'].includes(message.type) && message.requestId) {
+        panel?.webview.postMessage({ type: 'findingActionError', taskId: message.taskId, requestId: message.requestId, error: redactDiagnostic(error.message) });
+      }
+      if (['diagnostics', 'exportDiagnostics'].includes(message.type)) {
+        panel?.webview.postMessage({ type: 'diagnosticError', taskId: message.taskId, turnId: message.turnId, requestId: message.requestId, error: redactDiagnostic(error.message) });
+        return;
+      }
       if (message.type === 'ask') panel?.webview.postMessage({ type: 'requestRejected', taskId: task?.id, requestId: message.requestId });
       state.status = error.message; publish();
     }
@@ -1007,6 +1067,7 @@ exports.activate = async context => {
         .replace('{{i18n}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/i18n.js')).toString())
         .replace('{{confirmation}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/confirmation.js')).toString())
         .replace('{{findings}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/findings.js')).toString())
+        .replace('{{transparency}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/transparency.js')).toString())
         .replace('{{workspace}}', panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media/workspace.js')).toString())
         .replace('{{uiStyle}}', uiStyle.toString())
         .replace('{{script}}', script.toString()).replace('{{style}}', style.toString()).replace('{{markdown}}', markdown.toString());
@@ -1014,6 +1075,7 @@ exports.activate = async context => {
       const created = panel;
       created.onDidDispose(() => {
         if (panel !== created) return;
+        processViews.clear();
         panel = null;
         if (shuttingDown || closingPanel) return;
         confirmations.cancel();

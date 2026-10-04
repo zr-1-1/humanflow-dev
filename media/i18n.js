@@ -1,5 +1,15 @@
 /* 只翻译显式标记的界面文案；插值、代码、用户输入与模型正文保持原样。 */
 const humanflowEnglish = {
+  '暂无可选依据。可关联已有成功记录，或核对命令后运行验证；也可选择仅人工核对。': 'No evidence is available yet. Link a successful record or review and run a check; manual review is also available.',
+  '关联已有成功验证': 'Link a successful validation',
+  '请先确认该命令实际覆盖此问题；关联后才能勾选为解决依据。': 'Confirm that the command covers this finding before linking it and selecting it as resolution evidence.',
+  '确认覆盖并关联': 'Confirm coverage and link',
+  '核对并运行验证': 'Review and run validation',
+  '以下操作会关联此问题并申请运行具体命令；验证成功后仍需勾选记录并确认解决。': 'These actions link the finding to a new run and request permission to execute the command. After success, select the record and confirm the outcome.',
+  '关联此问题并运行': 'Link this finding and run',
+  '关联此问题并重跑': 'Link this finding and rerun',
+  '尚无建议验证命令。可先讨论此问题获取验证建议，或人工核对后记录结果。': 'No check has been suggested. Discuss this finding for validation suggestions, or record the outcome after manual review.',
+  '关联问题 {0}；请核对命令覆盖范围。{1}': 'Linked finding: {0}; review command coverage. {1}',
   '退出码': 'Exit code',
   '请先重新打开问题，再提出修复候选': 'Reopen the finding before proposing a repair.',
   "关闭时的代码版本": "Code version at closure",
@@ -515,6 +525,37 @@ Object.assign(humanflowEnglish, {
   "代码已变化，候选原文保留为只读记录；下轮同步最新代码。": "Code changed. The proposal remains as a read-only record. The next turn will use current code.",
   "任务已恢复，保留候选已重新核对；应用前仍需检查当前代码。": "Task restored and the preserved proposal rechecked. Review current code before applying.",
   "关注点已更新，任务讨论和候选原文保留。": "Focus updated. Discussion and proposal content are preserved."
+});
+
+Object.assign(humanflowEnglish, {
+  '当前任务状态': 'Current task status', '当前关注': 'Current focus', '等待输入': 'Waiting for input',
+  '更新关注点': 'Update focus', '选择文件': 'Choose file',
+  '本轮已发送的上下文': 'Context sent for this turn', '关注文件': 'Focused file', '文件无法读取': 'File unavailable',
+  '发送时的编辑器内容': 'Editor contents at send time',
+  '本轮发送 {0} 字符 · 已省略 {1} 条历史': 'Sent {0} characters · {1} history entries omitted',
+  '另有 {0} 个文件的明细未保留。': 'Details for {0} additional files were not retained.',
+  '引用后草稿超过 12000 字符，请先精简草稿；原内容已保留。': 'The draft with this reference exceeds 12,000 characters. Shorten the draft first; your original text is preserved.',
+  '准备上下文': 'Preparing context', '连接模型服务': 'Connecting to model service', '等待模型响应': 'Waiting for model response',
+  '校验候选': 'Checking proposal', '等待审查': 'Awaiting review', '服务端摘要': 'Server-provided summary',
+  '扩展重启，过程已中断': 'Extension restarted; execution was interrupted', '请求失败': 'Request failed', '请求已取消': 'Request cancelled',
+  '已等待 {0} · 最近可见进度 {1}': 'Elapsed {0} · Last visible progress {1}', '尚未收到': 'Not received',
+  '查看当前关注范围': 'View current focus', '查看最近发送的上下文': 'View last sent context',
+  '查看上下文明细': 'View context details', '最近发送 {0} 字符': 'Last sent: {0} characters', '尚未发送上下文': 'No context sent yet',
+  '执行过程': 'Execution details', '进行中': 'In progress', '{0} 项事件': '{0} events',
+  '候选涉及 {0} 个文件': 'Proposal affects {0} files', '验证记录 {0} 项': '{0} validation records',
+  '讨论此结果': 'Discuss this result', '查看历史批次': 'View historical batch',
+  '较早过程已因保留上限省略，轮次结论仍保留。': 'Older execution details were omitted due to retention limits. Turn outcomes are retained.',
+  '旧记录未保存过程。': 'Execution details were not saved for this older record.',
+  '仅展示已收到的公开摘要与操作，未完整追踪全部读取。': 'Only received public summaries and actions are shown. File reads are not fully tracked.',
+  '未返回摘要。': 'No summary was returned.', '已省略 {0} 项较早过程。': '{0} older events were omitted.',
+  '本条仅保留部分文本。': 'Only part of this text is retained.', '尚未收到可展示事件。': 'No displayable events received yet.',
+  '诊断预览': 'Diagnostic preview', '选择轮次': 'Select turn', '公开事件记录': 'Public event records',
+  '诊断预览已保存。': 'Diagnostic preview saved.', '已取消保存，预览仍保留。': 'Saving cancelled; the preview is retained.',
+  '已发送上下文组成': 'Sent context composition', '生成脱敏预览': 'Generate redacted preview',
+  '可编辑预览（仅本地）': 'Editable preview (local only)', '关闭预览': 'Close preview', '保存诊断预览': 'Save diagnostic preview',
+  '请选择诊断范围。': 'Select a diagnostic scope.', '过程记录不存在': 'Execution record not found.', '诊断范围无效': 'Invalid diagnostic scope.',
+  '诊断导出仅支持本地 JSON 文件': 'Diagnostics can only be saved to a local JSON file.',
+  '仅查看本地保留的事件与上下文组成，不请求模型。记录可能含代码和路径；自动遮盖不能识别全部敏感信息，请核对后保存。': 'View locally retained events and context composition without a model request. Records may contain code and paths; automatic redaction cannot identify every sensitive value. Review before saving.'
 });
 
 function createHumanflowI18n(initialLanguage = 'zh-CN') {

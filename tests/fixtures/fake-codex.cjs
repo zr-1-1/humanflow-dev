@@ -27,6 +27,9 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (input.request === 'fail') {
       send({ method: 'turn/completed', params: { threadId: 'test-thread', turn: { id, status: 'failed', error: { message: '模拟替换请求失败' } } } }); return;
     }
+    send({ method: 'item/reasoning/summaryTextDelta', params: { threadId: 'test-thread', turnId: id, itemId: 'summary', summaryIndex: 0, delta: '检查合成项目，候选等待人工审查。' } });
+    send({ method: 'item/started', params: { threadId: 'test-thread', turnId: id, item: { id: 'read', type: 'commandExecution', command: 'read synthetic project' } } });
+    send({ method: 'item/completed', params: { threadId: 'test-thread', turnId: id, item: { id: 'read', type: 'commandExecution', command: 'read synthetic project', status: 'completed', exitCode: 0, aggregatedOutput: 'not archived tool output' } } });
     send({ method: 'thread/tokenUsage/updated', params: { threadId: 'test-thread', turnId: id, tokenUsage: { total: { totalTokens: 100, inputTokens: 80, cachedInputTokens: 0, outputTokens: 20, reasoningOutputTokens: 0 }, modelContextWindow: 128000 } } });
     if (input.request === 'followup') {
       const outcome = input.task.outcomes.at(-1);

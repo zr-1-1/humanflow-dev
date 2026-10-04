@@ -12,7 +12,7 @@
 
 HumanFlow turns Codex into a project task collaborator inside VS Code. The model discusses your task, explains code, and proposes changes. **You decide whether to apply them and which fragments to accept.** Task goals and confirmed decisions persist across turns, independently of history trimming and thread compaction.
 
-> Current version: 0.4.4 (experimental). Download the VSIX from the [GitHub Release](https://github.com/zr-1-1/humanflow-dev/releases/tag/v0.4.4), or build one from source. The [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow) is a separate distribution channel. Reload the window after installing a new VSIX.
+> Development version: 0.4.5 (not yet released). The latest published 0.4.4 VSIX is available from the [GitHub Release](https://github.com/zr-1-1/humanflow-dev/releases/tag/v0.4.4). You can also build from source. The [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow) is a separate distribution channel. Reload the window after installing a new VSIX.
 >
 > Choose **简体中文 / English** in the panel header to switch the interface language. The choice is saved locally and applies immediately. Drafts, selections, and task content are preserved; user input, code, and model responses remain in their original language. Chinese labels below also help you navigate older releases.
 
@@ -82,6 +82,16 @@ Focus can cover a whole file or a selection. Moving the cursor does not change i
 
 You can also choose a file from the current task's project with `选择文件作为关注点` (“Choose file as focus”), without opening the editor or selecting code first. It focuses on the whole file. Cancelling keeps the existing focus. If proposals exist, switching requires confirmation and marks the previous proposal stale while preserving the discussion and proposal text.
 
+### Layered transparency and execution history
+
+The header shows the current focus, execution stage, elapsed time, and last visible progress. Composer tags distinguish the current focus from the last sent context. Each turn links to its proposal, historical batch, discussion, and execution details. Discussing a result appends a reference while preserving your existing draft.
+
+Execution details load when expanded and reuse nodes during updates. Collapsing stops detail subscriptions. A nested context section shows file sources and versions at send time. These are received public summaries and actions, not a complete reasoning trace or a complete record of file reads.
+
+Execution archives retain up to 30 turns within a 256 KiB task budget, with up to 60 entries per turn and 6,000 characters per entry. Omission, truncation, and restart interruption are indicated; turn outcomes remain available. Context composition retains details for up to 50 files and counts additional omitted files.
+
+Use Diagnostic preview from a turn or extension settings to select a turn and scope, generate a redacted preview, edit it, and save a local JSON file. Viewing and exporting do not call the model. Records may still contain code and paths; review sensitive content yourself. Internal reasoning, full tool output, and original model requests are not archived. The existing failed-response command remains available.
+
 ### Panel lifecycle and proposal protection
 
 Hiding, resizing, minimizing, or switching tabs preserves requests, proposals, drafts, and selections. Reopening only reveals the current task; use Update focus to change its scope explicitly. A new request replaces the previous proposal only after successful validation. Failure, timeout, or cancellation preserves the original proposal. Real code changes keep its content readable but prevent applying it. Closing and reopening, or switching tasks in the same extension host, preserves proposals for review.
@@ -114,6 +124,8 @@ Select several findings and click `讨论勾选问题` (“Discuss selected find
 The default **Needs attention** view contains open, pending-validation, and deferred findings, plus ended findings that have been reported again. **Ended** retains resolved and dismissed records. Search titles, paths, or stable finding numbers and combine category and status filters. Lists initially render 50 records; loading more preserves the stored history.
 
 Selected findings support batch discussion, deferral, outcome recording, and reopening. Closing requires a note and either **Manual review only** or linked, successful, current validation evidence. Dismissal requires a reason. Closure freezes the finding and validation evidence; undo and reopening preserve the UUID, display number, and history. An exact repeat report keeps the prior conclusion and adds a review reminder. Reopen it or explain why it should stay ended.
+
+If **With validation evidence** has no selectable records, expand **Link a successful validation** in the outcome form and confirm coverage before linking a record. Alternatively, expand **Review and run validation**, review the specific command, and run or rerun it. Select the resulting record, add a note, and confirm to move the finding to **Ended**. Successful execution alone does not close findings; stale, failed, or unsaved-code validation cannot serve as current evidence.
 
 Check suggestions and execution results retain stable IDs and history with many-to-many finding links. Select findings, then click **Link selected findings** on a check or validation record. Running a linked check carries its associations into the new execution record. Selecting findings narrows the displayed validation history; clearing selection restores all records. Code changes and extension restarts record why evidence needs review. Rerunning a historical command still requires confirmation. A successful exit code never closes findings automatically or proves semantic correctness. Partial application and save failures still require validation.
 

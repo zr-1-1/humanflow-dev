@@ -21,10 +21,13 @@ const dir = await mkdtemp(join(tmpdir(), 'humanflow-interaction-'));
 const project = join(dir, 'project'), profile = join(dir, 'profile'), home = join(dir, 'home');
 for (const path of [project, join(profile, 'User'), home]) await mkdir(path, { recursive: true });
 await writeFile(join(project, 'focus.js'), 'const first = 1;\nconst second = 2;\n');
+await writeFile(join(project, 'a.js'), 'const a = 1;\n');
+await writeFile(join(project, 'b.js'), 'const b = 1;\n');
 await writeFile(join(profile, 'User/settings.json'), JSON.stringify({
   'humanflow.nodePath': process.execPath, 'humanflow.codexJsPath': join(root, 'tests/fixtures/fake-codex.cjs'),
   'update.mode': 'none', 'extensions.autoUpdate': false, 'telemetry.telemetryLevel': 'off',
   'workbench.startupEditor': 'none', 'window.restoreWindows': 'none',
+  'window.dialogStyle': 'custom',
 }));
 let latest, commands = [], logs = [], child, ws, launchError;
 const server = createServer(async (req, res) => {
@@ -150,6 +153,40 @@ try {
   assert.equal(bound.focus?.selected, 'const firs');
   assert.equal(relative(join(project, 'focus.js'), bound.focus?.path), '');
   console.log('PASS: 选区进入 Webview 后通过页面按钮更新关注点');
+  await evaluate("document.getElementById('question').value='audit'; document.getElementById('form').requestSubmit()");
+  await until(async () => await evaluate("lastSnapshot.turns?.at(-1)?.status === 'completed'"));
+  assert.equal(await evaluate("document.querySelectorAll('.round-process .progress-entry').length"), 0);
+  await evaluate("document.querySelector('.round-process').open=true");
+  await until(async () => await evaluate("document.querySelectorAll('.round-process .progress-entry').length === 2"));
+  const completedTurns = await evaluate("lastSnapshot.turns.length");
+  await evaluate("document.getElementById('open-diagnostics').click(); document.getElementById('diagnostic-generate').click()");
+  await until(async () => await evaluate("!document.getElementById('diagnostic-save').disabled"));
+  assert.equal(await evaluate("JSON.parse(document.getElementById('diagnostic-preview').value).process.entries.length"), 2);
+  assert.equal(await evaluate("JSON.parse(document.getElementById('diagnostic-preview').value).context.focus.version.length"), 64);
+  assert.equal(await evaluate("lastSnapshot.turns.length"), completedTurns);
+  await evaluate("document.getElementById('diagnostic-close').click()");
+  console.log('PASS: 按轮过程按需加载，诊断预览通过真实消息桥且不发起新模型回合');
+  await evaluate("document.getElementById('tab-findings').click(); document.getElementById('findings-panel').open=true; document.querySelector('#findings input[type=checkbox]').click(); document.getElementById('close-findings').click(); document.querySelector('#finding-resolution select[aria-label=\"确认依据\"]').value='validation'; document.querySelector('#finding-resolution select[aria-label=\"确认依据\"]').dispatchEvent(new Event('change'))");
+  assert.equal(await evaluate("document.querySelectorAll('#finding-resolution input[type=checkbox]').length"), 0);
+  await evaluate("document.querySelector('#finding-resolution textarea').value='已核对命令覆盖'; document.querySelector('#finding-resolution textarea').dispatchEvent(new Event('input')); document.querySelector('#finding-resolution [data-run-finding-validation]').click()");
+  const nativeConfirmation = await until(async () => {
+    for (const context of contexts) try {
+      const response = await call('Runtime.evaluate', {contextId:context.id,expression:`(() => {
+        const box=document.querySelector('.monaco-dialog-box'); if(!box || !box.offsetWidth || !box.textContent.includes('echo HumanFlow-test')) return null;
+        const run=[...box.querySelectorAll('button, .monaco-button')].find(button=>button.textContent.trim()==='运行');
+        if(!run) return null; const text=box.textContent; run.click(); return text;
+      })()`,returnByValue:true},context.sessionId);
+      if (response.result?.value) return response.result.value;
+    } catch {}
+  });
+  assert.match(nativeConfirmation, /F-001/);
+  await until(async () => await evaluate("!lastSnapshot.busy && document.querySelectorAll('#finding-resolution input[type=checkbox]').length===1"));
+  assert.equal(await evaluate("document.querySelector('#finding-resolution textarea').value"), '已核对命令覆盖');
+  await evaluate("document.querySelector('#finding-resolution input[type=checkbox]').click(); document.querySelector('#finding-resolution .actions button').click()");
+  await until(async () => await evaluate("lastSnapshot.findings[0].status==='resolved' && document.getElementById('finding-resolution').hidden"));
+  assert.equal(await evaluate("lastSnapshot.findings[0].statusHistory.at(-1).resolution.method"), 'validation');
+  assert.equal(await evaluate("lastSnapshot.turns.length"), completedTurns);
+  console.log('PASS: 无验证依据时在真实表单核对并运行命令，成功记录出现后人工确认归档；未增加模型回合');
   await evaluate("document.getElementById('close-panel').click()");await delay(500);
   assert.equal((await driverCommand('snapshot')).confirmation?.kind, 'closePanel');
   assert.equal(JSON.parse(await ui()).dialogOpen, true);
