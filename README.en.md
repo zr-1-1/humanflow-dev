@@ -12,7 +12,7 @@
 
 HumanFlow turns Codex into a project task collaborator inside VS Code. The model discusses your task, explains code, and proposes changes. **You decide whether to apply them and which fragments to accept.** Task goals and confirmed decisions persist across turns, independently of history trimming and thread compaction.
 
-> Development version: 0.4.5 (not yet released). The latest published 0.4.4 VSIX is available from the [GitHub Release](https://github.com/zr-1-1/humanflow-dev/releases/tag/v0.4.4). You can also build from source. The [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow) is a separate distribution channel. Reload the window after installing a new VSIX.
+> Current version: 0.4.5. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow), or download the VSIX from the [GitHub Release](https://github.com/zr-1-1/humanflow-dev/releases/tag/v0.4.5). Reload the window after installing an update.
 >
 > Choose **简体中文 / English** in the panel header to switch the interface language. The choice is saved locally and applies immediately. Drafts, selections, and task content are preserved; user input, code, and model responses remain in their original language. Chinese labels below also help you navigate older releases.
 

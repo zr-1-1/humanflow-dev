@@ -2,7 +2,7 @@
 
 方案日期：2026-10-03。实施记录更新：2026-10-04。
 
-状态：已在本地 0.4.5 开发版实施并验证。阶段 A、B 已实现，阶段 C 首版限于公开事件与请求组成的按需诊断；不归档原始协议包、完整请求、内部思维或完整工具输出。下文保留设计依据，第 10 节记录实际交付和验证范围。尚未发布此版本。
+状态：已在 0.4.5 实施并验证。阶段 A、B 已实现，阶段 C 首版限于公开事件与请求组成的按需诊断；不归档原始协议包、完整请求、内部思维或完整工具输出。下文保留设计依据，第 10 节记录实际交付、验证范围及发布入口。
 
 适用范围：HumanFlow 面板的信息层级、每轮执行过程展示、上下文说明和诊断入口。保持用户审查后显式应用候选的工作方式。
 
@@ -250,9 +250,9 @@ VS Code 官方建议 Webview 保持主题兼容、支持可访问性、使用恰
 
 测试日志和测量报告保存在本地忽略目录 `dist/`：`transparency-unit-tests.log`、`ui-transparency-tests.log`、`webview-transparency-tests.log`、`host-transparency-tests.log`、`transparency-performance.json`。
 
-### 10.4 版本与安装
+### 10.4 首次本地交付与安装（发布前记录）
 
-当前源码版本为本地待发布的 0.4.5；已有 0.4.4 发布与安装包保留。安装包使用英文扩展详情，并包含中文版说明。此轮不改变 GitHub Release 或 Marketplace 的已发布版本。
+首次本地交付时，源码版本为待发布的 0.4.5，已有 0.4.4 发布与安装包保留。安装包使用英文扩展详情，并包含中文版说明；当时尚未更新 GitHub Release 或 Marketplace。
 
 已生成 `dist/humanflow-0.4.5.vsix`（135 个文件），逐项检查 ZIP 大小与 CRC32、版本、英文/中文 README 和新增运行文件；开发文档与测试未入包，原有 0.4.4 安装包 SHA256 未变化。新版校验值写入 `dist/humanflow-0.4.5.vsix.sha256`，检查报告为 `dist/transparency-package-verification.json`。
 
@@ -267,3 +267,9 @@ VS Code 官方建议 Webview 保持主题兼容、支持可访问性、使用恰
 验证记录变化时重新生成可选列表，保留处理说明和确认方式，移除已过期的勾选；切换为人工核对时同时清空提交依据和可见勾选。宿主拒绝提交的原因直接显示在表单中。成功记录出现后仍需用户勾选、填写说明并确认，才归入“已结束”；没有运行验证的人工解决仍使用“仅人工核对”。
 
 验证：107 项完整测试通过；追加验证版本冲突、取消原生确认、直接关联运行记录、动态列表刷新和确认方式切换的回归检查通过。真实 VS Code Webview 从空依据表单发起 `echo HumanFlow-test`，核对并点击原生命令确认，实际任务执行成功后在原表单勾选新记录并归档，未新增模型回合。日志位于 `dist/finding-validation-*.log`，本地 0.4.5 安装包已重新生成。
+
+### 10.6 正式发布入口（2026-10-04）
+
+公开源码同步 PR #12 已合入 `main`，11 项云端检查通过。Marketplace 的公开版本已核对为 0.4.5，README 和 CHANGELOG 的开发版标记已整理为正式版本信息。
+
+GitHub Release 使用 `v0.4.5` 标签，通过仓库现有发布工作流校验版本、执行完整测试、构建 VSIX 并附加 SHA256 校验文件。发布入口：[GitHub Release 0.4.5](https://github.com/zr-1-1/humanflow-dev/releases/tag/v0.4.5)、[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow)。安装或更新后请重新加载窗口。
