@@ -12,7 +12,7 @@
 
 HumanFlow 把 Codex 变成 VS Code 里的项目任务协作者：模型负责讨论、解释并给出候选修改，**是否应用、应用哪些片段始终由你决定**。任务目标与已确认的固定决策会跨轮保留，不受上下文裁剪和线程压缩影响。
 
-> 当前开发版本：0.4.5（尚未发布）。已发布的 0.4.4 通过 [GitHub Release](https://github.com/zr-1-1/humanflow-dev/releases/tag/v0.4.4) 分发 VSIX；[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow) 是单独的发布渠道。安装新版 VSIX 后请重新加载窗口。
+> 当前版本：0.4.5。可通过 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=windflowing.humanflow) 安装，或从 [GitHub Release](https://github.com/zr-1-1/humanflow-dev/releases/tag/v0.4.5) 下载 VSIX。安装新版后请重新加载窗口。
 
 ## 特性
 
